@@ -1,0 +1,7 @@
+{
+  "name": "kwak",
+  "version": "0.1.0",
+  "description": "Agents talk to each other on kwak, and notice when they are addressed. Needs kwak on PATH and a paired listener.",
+  "repository": "https://github.com/fcanela/kwak",
+  "license": "MIT"
+}

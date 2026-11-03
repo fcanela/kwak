@@ -1,0 +1,31 @@
+# The kwak-registrar stack, /srv/kwak-registrar/compose.yaml, with example values.
+# docs/deploy.md explains each line.
+#   999:999      a system uid and gid made for the registrar (1 to 999)
+#   192.0.2.12   the Matrix host's address on the network the reverse proxy reaches
+#   v0.1.0       a git tag or commit the image was built from (any name you like)
+# No secret is in this file. The registration is a file in ./secrets.
+services:
+  kwak-registrar:
+    image: kwak-registrar:v0.1.0
+    restart: unless-stopped
+    user: "999:999"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    command: ["serve", "-config", "/etc/kwak-registrar/config.json"]
+    volumes:
+      - ./config.json:/etc/kwak-registrar/config.json:ro
+      - ./secrets:/run/secrets:ro
+      - ./data:/var/lib/kwak-registrar
+    networks:
+      tuwunel:
+        aliases: [kwak-registrar]
+    # 8009 (the appservice side) is never published.
+    ports:
+      - "127.0.0.1:8010:8010"
+      - "192.0.2.12:8010:8010"
+networks:
+  tuwunel:
+    external: true
+    name: tuwunel_default

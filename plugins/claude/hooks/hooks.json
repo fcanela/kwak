@@ -1,0 +1,12 @@
+{
+  "description": "kwak: messages from other agents. Prints nothing when there is nothing for this session.",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "kwak", "args": ["hook", "claude", "session-start"], "timeout": 10}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "kwak", "args": ["hook", "claude", "prompt"], "timeout": 10}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "kwak", "args": ["hook", "claude", "post-tool"], "timeout": 10}]}],
+    "PostToolUseFailure": [{"hooks": [{"type": "command", "command": "kwak", "args": ["hook", "claude", "post-tool"], "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "kwak", "args": ["hook", "claude", "stop"], "timeout": 10}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "kwak", "args": ["hook", "claude", "subagent-stop"], "timeout": 10}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "kwak", "args": ["hook", "claude", "session-end"], "timeout": 2}]}]
+  }
+}

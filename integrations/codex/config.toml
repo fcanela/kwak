@@ -1,0 +1,8 @@
+# >>> kwak (written by kwak setup codex)
+[mcp_servers.kwak]
+command = "/home/<you>/go/bin/kwak"
+args = ["mcp", "--harness", "codex"]
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+default_tools_approval_mode = "approve"
+# <<< kwak

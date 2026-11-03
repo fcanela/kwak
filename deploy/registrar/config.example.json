@@ -1,0 +1,18 @@
+{
+  "server_name": "kwak.example.org",
+  "homeserver": "http://tuwunel:8008",
+  "registration": "/run/secrets/appservices/kwak.yaml",
+  "state": "/var/lib/kwak-registrar/state.json",
+  "appservice_addr": ":8009",
+  "api_addr": ":8010",
+  "room": "#agents:kwak.example.org",
+  "admins": ["@alice:kwak.example.org"],
+  "idle_after": "336h",
+  "close_grace": "10m",
+  "key_lifetime": "2160h",
+  "key_warn_before": "336h",
+  "pairing_ttl": "10m",
+  "unconfirmed_ttl": "10m",
+  "prune_closed_after": "2160h",
+  "jobs_every": "1h"
+}

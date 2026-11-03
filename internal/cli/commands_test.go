@@ -1,0 +1,301 @@
+package cli
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/fcanela/kwak/internal/ipc"
+	"github.com/fcanela/kwak/internal/wire"
+	"github.com/fcanela/kwak/internal/wire/wiretest"
+)
+
+func ipcRow(t *testing.T, name string) wiretest.IPCCase {
+	t.Helper()
+	for _, c := range wiretest.IPC {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("no IPC row %q", name)
+	return wiretest.IPCCase{}
+}
+
+func TestStatus(t *testing.T) {
+	r := newRig(t)
+	r.ln.replies[wire.OpStatus] = []string{ipcRow(t, "status, syncing").Reply}
+	code, out, errs := r.run(r.cli.Status, "")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	for _, want := range []string{
+		"Listener: syncing, last sync 2026-11-02 10:41 UTC (kwak 0.1.0)",
+		"Pairing: fcanela on laptop, pairing 3f9a1c2e, server https://kwak.test",
+		"Key valid until: 2027-01-31",
+		"Owner settings: background resume off, question timeout 15m",
+		"Resume: background resume: Claude only; 1 runs, 0 running",
+		"Caller checks: peer",
+		"Sessions: 2",
+		"  claude:" + wiretest.ClaudeSession + " in /home/u/src/app",
+		"agent " + wiretest.ClaudeAgent + "; helpers " + wiretest.HelperAgent + "; tools connected; inbox 2",
+		"started 2026-11-02 09:00 UTC, last hook 2026-11-02 10:40 UTC",
+		"volunteers; inbox 0",
+		"no hook seen for session codex:" + wiretest.CodexSession,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	if got := r.ln.ops; len(got) != 1 || got[0] != wire.OpStatus {
+		t.Errorf("ops %v", got)
+	}
+}
+
+func TestStatusStates(t *testing.T) {
+	cases := map[string][]string{
+		"status, unpaired":                       {"Listener: not paired", wiretest.TextUnpaired, "Sessions: none"},
+		"status, waiting for the keyring":        {"Listener: waiting for the keyring", "waiting for the keyring (locked?)", "Caller checks: claimed"},
+		"status, connecting after a state reset": {"Listener: connecting", "Last error: registrar unreachable, HTTP 502", "State reset: messages since the last good state may be missed."},
+	}
+	for row, wants := range cases {
+		r := newRig(t)
+		r.ln.replies[wire.OpStatus] = []string{ipcRow(t, row).Reply}
+		code, out, _ := r.run(r.cli.Status, "")
+		if code != 0 {
+			t.Errorf("%s: exit %d", row, code)
+		}
+		for _, w := range wants {
+			if !strings.Contains(out, w) {
+				t.Errorf("%s: lacks %q:\n%s", row, w, out)
+			}
+		}
+	}
+}
+
+func TestStatusListenerDown(t *testing.T) {
+	r := newRig(t)
+	code, out, errs := r.run(r.cli.Status, "")
+	if code != 1 || !strings.Contains(errs, listenerDown) || !strings.Contains(out, "not paired") {
+		t.Fatalf("exit %d: %s %s", code, out, errs)
+	}
+	r.paired()
+	_, out, _ = r.run(r.cli.Status, "")
+	if !strings.Contains(out, "paired as fcanela on laptop (pairing 77c0de11") {
+		t.Errorf("paired machine: %s", out)
+	}
+	if code, _, _ := r.run(r.cli.Status, "", "x"); code != 2 {
+		t.Errorf("extra argument: exit %d", code)
+	}
+}
+
+func TestInbox(t *testing.T) {
+	r := newRig(t)
+	r.ln.replies[wire.OpInbox] = []string{ipcRow(t, "inbox").Reply}
+	code, out, _ := r.run(r.cli.Inbox, "")
+	want := "3 messages for claude:" + wiretest.ClaudeSession + " (" + wiretest.ClaudeAgent + ", ended), in /home/u/src/app\n" +
+		"  resume: claude --resume " + wiretest.ClaudeSession + " (run it in /home/u/src/app)\n"
+	if code != 0 || out != want {
+		t.Errorf("exit %d\n got %q\nwant %q", code, out, want)
+	}
+
+	r.ln.replies[wire.OpInbox] = []string{ipcRow(t, "inbox, empty").Reply}
+	if _, out, _ := r.run(r.cli.Inbox, ""); out != "No messages are waiting.\n" {
+		t.Errorf("empty: %q", out)
+	}
+	delete(r.ln.replies, wire.OpInbox)
+	if code, _, errs := r.run(r.cli.Inbox, ""); code != 1 || !strings.Contains(errs, listenerDown) {
+		t.Errorf("down: exit %d %s", code, errs)
+	}
+}
+
+func TestConfigResume(t *testing.T) {
+	r := newRig(t)
+	r.paired()
+	code, out, _ := r.run(r.cli.Config, "", "resume")
+	if code != 0 || !strings.Contains(out, "in your chat with @registrar:kwak.test") || !strings.Contains(out, "    set resume replies\n") {
+		t.Errorf("exit %d:\n%s", code, out)
+	}
+	if len(r.reg.log()) != 0 || len(r.ln.ops) != 0 || r.config()["resume_exe"] == nil {
+		t.Error("config resume changed something")
+	}
+	if code, _, _ := r.run(r.cli.Config, ""); code != 2 {
+		t.Errorf("no setting: exit %d", code)
+	}
+	if code, _, _ := r.run(r.cli.Config, "", "colour"); code != 2 {
+		t.Errorf("unknown setting: exit %d", code)
+	}
+}
+
+func TestConfigResumeExe(t *testing.T) {
+	r := newRig(t)
+	bin := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errs := r.run(r.cli.Config, "", "resume-exe"); code != 1 || !strings.Contains(errs, "not paired") {
+		t.Errorf("unpaired: exit %d: %s", code, errs)
+	}
+	r.paired()
+	var looked []string
+	r.cli.env.LookPath = func(name string) (string, error) { looked = append(looked, name); return bin, nil }
+	code, out, errs := r.run(r.cli.Config, "", "resume-exe")
+	if code != 0 || !strings.Contains(out, "Recorded "+bin) {
+		t.Fatalf("exit %d: %s %s", code, out, errs)
+	}
+	exe := r.config()["resume_exe"].(map[string]any)
+	if exe["claude"] != bin || strings.Join(looked, ",") != "claude" {
+		t.Errorf("resume_exe %v, looked %v", exe, looked)
+	}
+	if r.config()["future_field"] == nil {
+		t.Error("unknown field lost")
+	}
+
+	code, _, _ = r.run(r.cli.Config, "", "resume-exe", "--harness", "codex", bin)
+	if code != 0 || r.config()["resume_exe"].(map[string]any)["codex"] != bin {
+		t.Errorf("codex: exit %d", code)
+	}
+	if code, _, _ := r.run(r.cli.Config, "", "resume-exe", filepath.Dir(bin)); code != 1 {
+		t.Error("a directory was accepted")
+	}
+	plain := filepath.Join(t.TempDir(), "notexec")
+	os.WriteFile(plain, nil, 0o644)
+	if code, _, _ := r.run(r.cli.Config, "", "resume-exe", plain); code != 1 {
+		t.Error("a file without the exec bit was accepted")
+	}
+	if code, _, _ := r.run(r.cli.Config, "", "resume-exe", "--harness", "gemini"); code != 1 {
+		t.Error("unknown harness accepted")
+	}
+}
+
+func TestLoadConfig(t *testing.T) {
+	dir := t.TempDir()
+	write := func(s string) {
+		if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := loadConfig(dir, false); err != ErrNotPaired {
+		t.Errorf("missing: %v", err)
+	}
+	write(`{"version":2,"server":"https://kwak.test"}`)
+	if _, err := loadConfig(dir, false); err == nil || !strings.Contains(err.Error(), "kwak is older than its config; go install a newer kwak") {
+		t.Errorf("newer: %v", err)
+	}
+	write(`{"version":1,"server":"http://kwak.test"}`)
+	if _, err := loadConfig(dir, false); err == nil {
+		t.Error("http server accepted")
+	}
+	if _, err := loadConfig(dir, true); err != nil {
+		t.Errorf("http with the test option: %v", err)
+	}
+	write(`{nope`)
+	if _, err := loadConfig(dir, false); err == nil {
+		t.Error("bad JSON accepted")
+	}
+	write(`{"server":"https://kwak.test","owner":"fcanela","x":[1]}`)
+	c, err := loadConfig(dir, false)
+	if err != nil || c.Version != 1 || c.ResumeMax != DefaultResumeMax {
+		t.Fatalf("old file: %+v %v", c, err)
+	}
+	if err := c.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ConfigFile))
+	if !strings.Contains(string(data), `"x": [`) || !strings.Contains(string(data), `"version": 1`) {
+		t.Errorf("saved %s", data)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("temp files left: %v", entries)
+	}
+}
+
+func shortDir(t *testing.T) string {
+	d, err := os.MkdirTemp("", "kwcli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	return d
+}
+
+func TestSocketCaller(t *testing.T) {
+	path := filepath.Join(shortDir(t), "s", "kwak.sock")
+	ln, err := ipc.Listen(path, ipc.Policy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	got := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		line, _ := ipc.NewLineReader(c).Next()
+		got <- string(line)
+		c.Write([]byte(ipcRow(t, "inbox, empty").Reply + "\n"))
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var reply wire.InboxResponse
+	if err := SocketCaller(path)(ctx, wire.Head{V: 1, Op: wire.OpInbox}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if line := <-got; line != `{"v":1,"op":"inbox"}` {
+		t.Errorf("sent %s", line)
+	}
+	if !reply.OK || reply.Sessions == nil {
+		t.Errorf("reply %+v", reply)
+	}
+
+	ln.Close()
+	if err := SocketCaller(path)(ctx, wire.Head{V: 1, Op: wire.OpStatus}, &reply); err == nil {
+		t.Error("no error with the listener gone")
+	}
+}
+
+func TestRunnable(t *testing.T) {
+	dir := t.TempDir()
+	file := func(name string, mode os.FileMode) (os.FileInfo, string) {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, nil, mode); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi, p
+	}
+	for _, c := range []struct {
+		name    string
+		mode    os.FileMode
+		windows bool
+		want    bool
+	}{
+		{"claude", 0o755, false, true},
+		{"notes.txt", 0o644, false, false},
+		{"claude.exe", 0o644, true, true},
+		{"claude.CMD", 0o644, true, true},
+		{"claude.bat", 0o644, true, true},
+		{"notes.txt", 0o644, true, false},
+		{"claude", 0o755, true, false},
+	} {
+		fi, p := file(c.name, c.mode)
+		if got := runnable(fi, p, c.windows); got != c.want {
+			t.Errorf("%s windows=%v: %v, want %v", c.name, c.windows, got, c.want)
+		}
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runnable(fi, dir+".exe", true) || runnable(fi, dir, false) {
+		t.Error("a directory is runnable")
+	}
+}

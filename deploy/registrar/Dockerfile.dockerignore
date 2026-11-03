@@ -1,0 +1,8 @@
+# BuildKit reads this file for deploy/registrar/Dockerfile. Only what the build needs.
+*
+!go.mod
+!go.sum
+!cmd/kwak-registrar
+!internal
+**/*_test.go
+**/testdata

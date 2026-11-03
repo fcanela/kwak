@@ -1,0 +1,8 @@
+/kwak
+/kwak-registrar
+/bin/
+*.exe
+*.test
+*.out
+*.prof
+coverage.*

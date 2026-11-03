@@ -1,0 +1,22 @@
+# FALLBACK ONLY, for a Matrix host that drops traffic between containers on the bridge (docs/deploy.md,
+# the ping check). The registrar joins tuwunel's network namespace instead of the bridge.
+# Docker allows no ports, networks or aliases on such a service, so the tuwunel stack must:
+#   - publish 127.0.0.1:8010 and 192.0.2.12:8010 next to 8008, and
+#   - carry the network alias kwak-registrar, so the registration url stays valid.
+# tuwunel-tuwunel-1 is an example: read the real name from
+#   docker compose -f /srv/tuwunel/compose.yaml ps
+services:
+  kwak-registrar:
+    image: kwak-registrar:v0.1.0
+    restart: unless-stopped
+    user: "999:999"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    command: ["serve", "-config", "/etc/kwak-registrar/config.json"]
+    volumes:
+      - ./config.json:/etc/kwak-registrar/config.json:ro
+      - ./secrets:/run/secrets:ro
+      - ./data:/var/lib/kwak-registrar
+    network_mode: "container:tuwunel-tuwunel-1"

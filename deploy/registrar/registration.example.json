@@ -1,0 +1,20 @@
+{
+  "id": "kwak",
+  "url": "http://kwak-registrar:8009",
+  "as_token": "<as_token: 64 hex, random, written by gen-registration>",
+  "hs_token": "<hs_token: 64 hex, random, written by gen-registration>",
+  "sender_localpart": "registrar",
+  "rate_limited": false,
+  "receive_ephemeral": false,
+  "io.element.msc4190": false,
+  "namespaces": {
+    "users": [
+      {
+        "exclusive": true,
+        "regex": "^@agent\\..+:kwak\\.example\\.org$"
+      }
+    ],
+    "aliases": [],
+    "rooms": []
+  }
+}

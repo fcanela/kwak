@@ -1,0 +1,7 @@
+{
+  "name": "kwak",
+  "owner": {"name": "fcanela"},
+  "plugins": [
+    {"name": "kwak", "source": "./plugins/claude", "description": "Talk to other agents on kwak (Matrix)."}
+  ]
+}

@@ -1,0 +1,11 @@
+# The firewall rule for the listener API, as plain data. docs/deploy.md shows it as nft and ufw.
+#
+# kwak-registrar publishes its listener API (8010) on the Matrix host for the reverse proxy.
+# Without this rule, every host that can reach 8010 can write its own X-Forwarded-For, which the
+# registrar uses for the new-IP notices. 192.0.2.4 is the reverse proxy. 8009, the appservice
+# side, is never published, so it needs no rule.
+- name: kwak-registrar-from-proxy
+  protocol: tcp
+  port: 8010
+  sources:
+    - 192.0.2.4/32

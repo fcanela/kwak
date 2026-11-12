@@ -42,7 +42,16 @@ type Owner struct {
 	Added    time.Time     `json:"added"`
 	AddedBy  string        `json:"added_by"`
 	Removed  *time.Time    `json:"removed"`
-	Settings wire.Settings `json:"settings"`
+	Settings OwnerSettings `json:"settings"`
+}
+
+// OwnerSettings are an owner's settings (3.5). Resume is the background resume setting from
+// before decision 44, when it was set here: a state.json written then has it, so the strict
+// decoder must know the key. fill drops the value, so it is never sent or written again.
+// Background resume is now set on each machine (spec 5.11).
+type OwnerSettings struct {
+	Resume          string `json:"resume,omitempty"`
+	QuestionTimeout string `json:"question_timeout"`
 }
 
 // Pairing is one paired machine of an owner. KeySHA256 is empty until the key is claimed.
@@ -136,6 +145,9 @@ func (st *State) fill() {
 	}
 	if st.DoneEvents == nil {
 		st.DoneEvents = []string{}
+	}
+	for _, o := range st.Owners {
+		o.Settings.Resume = ""
 	}
 }
 

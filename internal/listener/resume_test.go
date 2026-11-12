@@ -22,11 +22,17 @@ func (e *env) endedClaude(p int, sid, dir, root string) string {
 	return uid
 }
 
-func resumeEnv(t *testing.T, setting string) *env {
+func resumeEnv(t *testing.T, on ...string) *env {
 	e := newEnv(t)
-	e.reg.me.Settings.Resume = setting
+	e.setResume(on...)
 	e.connect()
 	return e
+}
+
+// setResume writes this machine's background resume triggers to config.json, as kwak config
+// resume does (decision 44). The listener reads them before the next routed batch.
+func (e *env) setResume(on ...string) {
+	e.editConf(func(c *MachineConfig) { c.Resume = on })
 }
 
 func TestResumeArgvAndLog(t *testing.T) {
@@ -135,24 +141,33 @@ func TestResumeMaxPerMachine(t *testing.T) {
 }
 
 func TestResumeTriggers(t *testing.T) {
+	off, replies, mentions := []string(nil), []string{wire.ResumeReplies}, []string{wire.ResumeMentions}
+	all := []string{wire.ResumeReplies, wire.ResumeMentions}
 	cases := []struct {
-		setting string
+		on      []string
 		harness wire.Harness
 		reason  string
 		runs    int
 	}{
-		{wire.ResumeOff, "claude", "reply", 0},
-		{wire.ResumeReplies, "claude", "reply", 1},
-		{wire.ResumeReplies, "claude", "mention", 0},
-		{wire.ResumeReplies, "claude", "reply+mention", 1},
-		{wire.ResumeReplies, "claude", "mention elsewhere", 0},
-		{wire.ResumeAll, "claude", "reply+mention", 1},
-		{wire.ResumeAll, "claude", "mention", 1},
-		{wire.ResumeAll, "claude", "open", 0},
-		{wire.ResumeAll, "codex", "reply", 0},
+		{off, "claude", "reply", 0},
+		{off, "claude", "mention", 0},
+		{[]string{"open", "sometimes"}, "claude", "reply", 0}, // words this kwak does not know are off
+		{replies, "claude", "reply", 1},
+		{replies, "claude", "mention", 0},
+		{replies, "claude", "reply+mention", 1},
+		{replies, "claude", "mention elsewhere", 0},
+		{mentions, "claude", "reply", 0},
+		{mentions, "claude", "reply+mention", 0}, // a mention in its own thread is a reply
+		{mentions, "claude", "mention", 1},
+		{mentions, "claude", "mention elsewhere", 1},
+		{all, "claude", "reply", 1},
+		{all, "claude", "reply+mention", 1},
+		{all, "claude", "mention", 1},
+		{all, "claude", "open", 0},
+		{all, "codex", "reply", 0},
 	}
 	for _, c := range cases {
-		e := resumeEnv(t, c.setting)
+		e := resumeEnv(t, c.on...)
 		dir := t.TempDir()
 		var uid, key string
 		if c.harness == "claude" {
@@ -188,13 +203,73 @@ func TestResumeTriggers(t *testing.T) {
 		e.clk.Advance(resumeDelay)
 		e.l.deadlines()
 		if e.runner.count() != c.runs {
-			t.Errorf("%s %s %s: %d runs, want %d", c.setting, c.harness, c.reason, e.runner.count(), c.runs)
+			t.Errorf("%q %s %s: %d runs, want %d", c.on, c.harness, c.reason, e.runner.count(), c.runs)
+		}
+	}
+}
+
+// The triggers are a machine setting in config.json (decision 44). The listener reads them before
+// each routed batch, so kwak config resume needs no restart; a file it cannot read keeps the
+// triggers read last; kwak status shows them. The registrar's settings play no part.
+func TestResumeSetOnTheMachine(t *testing.T) {
+	e := resumeEnv(t)
+	if st := e.l.status(&client{pidOK: true}); st.Resume != "off" {
+		t.Fatalf("status resume %q, want off", st.Resume)
+	}
+	e.endedClaude(100, sid1, t.TempDir(), "$root")
+	e.deliver(event("$r1", bob, e.clk.Now(), inThread(text("a"), "$root")))
+	e.resumeNow()
+	if e.runner.count() != 0 {
+		t.Fatal("a run with no triggers in config.json")
+	}
+	e.setResume(wire.ResumeReplies)
+	e.deliver(event("$r2", bob, e.clk.Now(), inThread(text("b"), "$root")))
+	e.resumeNow()
+	if e.runner.count() != 1 {
+		t.Fatalf("%d runs after kwak config resume replies, want 1 with no restart", e.runner.count())
+	}
+	if err := os.WriteFile(e.confPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.l.status(&client{pidOK: true}); st.Resume != "replies" {
+		t.Fatalf("status resume %q with a broken config.json, want the triggers read last", st.Resume)
+	}
+}
+
+// A message that waits for its incoming check uses the triggers in config.json when the check
+// ends, not the ones read before it started: kwak config resume off during the check means no run,
+// and kwak config resume replies during the check means one.
+func TestResumeTriggersReadWhenTheCheckEnds(t *testing.T) {
+	for _, c := range []struct {
+		before, during []string
+		runs           int
+	}{
+		{[]string{wire.ResumeReplies}, nil, 0},
+		{nil, []string{wire.ResumeReplies}, 1},
+	} {
+		e := resumeEnv(t, c.before...)
+		e.endedClaude(100, sid1, t.TempDir(), "$root")
+		e.setChecks("", checkIn)
+		gate := make(chan struct{})
+		e.check.gate = gate
+		e.deliver(event("$r1", bob, e.clk.Now(), inThread(text("a"), "$root")))
+		eventually(t, "the check to start", func() bool { return len(e.check.calls()) == 1 })
+		e.setResume(c.during...)
+		close(gate)
+		eventually(t, "the delivery", func() bool {
+			e.l.mu.Lock()
+			defer e.l.mu.Unlock()
+			return len(e.l.st.Checking) == 0
+		})
+		e.resumeNow()
+		if e.runner.count() != c.runs {
+			t.Errorf("resume %q, then %q during the check: %d runs, want %d", c.before, c.during, e.runner.count(), c.runs)
 		}
 	}
 }
 
 func TestNoResumeWithToolsConnected(t *testing.T) {
-	e := resumeEnv(t, wire.ResumeAll)
+	e := resumeEnv(t, wire.ResumeReplies, wire.ResumeMentions)
 	uid := e.claudeSession(100, sid1, t.TempDir())
 	e.mcp(e.child(proc.ID{PID: 100, Start: 100}, 120).PID, "claude", "")
 	e.deliver(event("$x", bob, e.clk.Now(), text("hey", uid)))
@@ -275,7 +350,7 @@ func perHourOpt(n int) opt {
 // the hour allows it. The log says so once, and kwak status shows the limit while it holds.
 func TestResumePerHourLimit(t *testing.T) {
 	e := newEnv(t, perHourOpt(2))
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.connect()
 	t0 := e.clk.Now()
 	for i, sid := range []string{sid1, sid2, sid3} {
@@ -324,7 +399,7 @@ func TestResumePerHourLimit(t *testing.T) {
 // hour pass so the waiting run starts, then fill it again.
 func TestResumePerHourLogsAgainAfterARun(t *testing.T) {
 	e := newEnv(t, perHourOpt(2))
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.connect()
 	t0 := e.clk.Now()
 	sids := []string{sid1, sid2, sid3}
@@ -365,7 +440,7 @@ func TestResumePerHourLogsAgainAfterARun(t *testing.T) {
 // gives the time when enough of them are an hour old to bring the count under the new limit.
 func TestResumePerHourLoweredByReload(t *testing.T) {
 	e := newEnv(t, perHourOpt(5))
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.connect()
 	var starts []time.Time
 	for i, sid := range []string{sid1, sid2, sid3} {

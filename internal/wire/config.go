@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/fcanela/kwak/internal/secrets"
@@ -25,6 +26,10 @@ type MachineConfig struct {
 	StandingUser string             `json:"standing_user"`
 	ResumeMax    int                `json:"resume_max"`
 	ResumeExe    map[Harness]string `json:"resume_exe,omitempty"`
+	// Resume is this machine's background resume triggers (decision 44, spec 5.11): ResumeReplies,
+	// ResumeMentions or both. Missing or empty is off. Only kwak config resume writes it; kwak pair
+	// does not, and a re-pair keeps it.
+	Resume []string `json:"resume,omitempty"`
 	// ThreadCeiling is the loop ceiling: automatic turns per thread on this machine. kwak pair does
 	// not write it; a missing or zero value is DefaultThreadCeiling.
 	ThreadCeiling int `json:"thread_ceiling,omitempty"`
@@ -44,6 +49,24 @@ type MachineConfig struct {
 	// Test is set for a test pairing (decision 40): its room is the test room and its standing
 	// account the test one. kwak pair copies it from the claim. Added 2026-11-12.
 	Test bool `json:"test,omitempty"`
+}
+
+// Background resume triggers in config.json (decision 44, spec 5.11).
+const (
+	ResumeReplies  = "replies"  // a reply in a thread the session started
+	ResumeMentions = "mentions" // the session's agent is mentioned outside its own thread
+)
+
+// ResumeTriggers is the triggers of c.Resume that this kwak knows, replies first; nil means off. A
+// word it does not know (a hand edit, or one a newer kwak wrote) is left out.
+func (c MachineConfig) ResumeTriggers() []string {
+	var on []string
+	for _, t := range []string{ResumeReplies, ResumeMentions} {
+		if slices.Contains(c.Resume, t) {
+			on = append(on, t)
+		}
+	}
+	return on
 }
 
 // KeyName is the keyring item of this pairing's owner key (secrets.KeyName).

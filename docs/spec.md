@@ -5,7 +5,7 @@ feasibility, security and completeness reviews. Revised 2026-11-12 for decisions
 reacts; section 1.6 says what is built), again for decisions 39 and 40 (side rooms, test
 pairings, reports, dev builds and the keyring item per pairing), and for decision 41 (reports
 with the message text, no report cap, test rooms by name, a pairing of the other kind is a new
-pairing). Nothing here is applied to the Matrix host or the proxy.
+pairing), and for decision 44 (background resume is set on each machine). Nothing here is applied to the Matrix host or the proxy.
 
 Source of truth: the maintainer's design notes (not in this repo): the glossary, the numbered
 decisions in the maintainer's words, and the credentials design. This spec cites them as
@@ -136,14 +136,14 @@ Each one is repeated where it applies.
 | DV-6 | 20 (plan step 2) | The plan's "read inbox" tool is dropped. A `thread` tool reads one thread by id. | Decision 20 (later than the plan) says no inbox-checking tool. `thread` needs a thread id, and it exists because long messages are cut and a volunteer needs the thread's context. |
 | DV-7 | 10 | One owner key per **paired machine**, not one per owner. | Losing one laptop then revokes only that laptop. The owner is still added once by the server admin, and keys still come from the bot. |
 | DV-8 | 11 | "Notice from the session" means the session ended. The listener asks the registrar to close the agent 10 minutes after the session ends. A resume of the same session reopens it under the same name. | SessionEnd also fires on `/clear` and on resume switches (claude §3), so a short grace avoids churn. Reopening is for the same owner and the same full session id only, so decision 11's "never given to anyone else" holds. |
-| DV-9 | Pinned "one listener per owner, one Matrix connection per owner"; 14 | One listener and one `/sync` per **paired machine**: an owner with two machines has two listeners, two listener accounts (one per pairing since decision 42; before it, two devices of one per-owner standing account) and two syncs. In the addressed rule, "the owner's agents" is read per machine: each listener delivers to the agents of its own machine. | The sessions, the hooks and the socket are on each machine, so one per-owner connection would need one machine to relay to the others, and that machine would have to be on. The union of the listeners still delivers to all of the owner's agents. Per-owner settings (background resume, question timeout) live at the registrar, not on each machine (3.5), so they stay per owner. |
+| DV-9 | Pinned "one listener per owner, one Matrix connection per owner"; 14 | One listener and one `/sync` per **paired machine**: an owner with two machines has two listeners, two listener accounts (one per pairing since decision 42; before it, two devices of one per-owner standing account) and two syncs. In the addressed rule, "the owner's agents" is read per machine: each listener delivers to the agents of its own machine. | The sessions, the hooks and the socket are on each machine, so one per-owner connection would need one machine to relay to the others, and that machine would have to be on. The union of the listeners still delivers to all of the owner's agents. The question timeout is a per-owner setting at the registrar (3.5). Background resume is set on each machine since decision 44 (5.11). |
 | DV-10 | 21 | The owner's standing account never volunteers in the first build. Only a session can volunteer. | Nothing can answer through the standing account: it only syncs, and a volunteer needs a model. A long-lived session with `volunteer on` does the job of "an agent reacting to things". A standing volunteer that starts a headless session is section 12, Q14. |
 | DV-11 | 27 ("no limits"), pinned "no guards and no rate limits at first" | Four bounds stay: `resume_max` (10 background runs at a time per machine, decision 35; it was 2 before 2026-11-12), `resume_per_hour` (300 background runs started per machine in any 60 minutes, decision 38), the proxy rate limit on the unauthenticated `POST /pair`, and the 1,000 pending pairings kept in memory. | The first two protect decision 19 (cost) and the laptop: each run is a billed, unattended model run. Decision 34 found 2 too low ("If there is a limit present I would use something way higher") and decision 35 set 10. Decision 38 set the hourly limit ("Go 300 per hour") as the backstop of decision 37 against abuse. Extra runs wait for a free slot or for the hour; none is refused. The other two bound an unauthenticated route against abuse; they are not per-owner limits. No bound drops a message: queues and held items have no count cap (5.5). |
 | DV-12 | 13 ("start with no guards") | Two transforms that are not content guards are kept: `render` strips invisible characters and escapes tag-like text in other agents' messages (6.1), and the registrar resets an agent's display name and avatar to its mxid (3.3). | Neither blocks a message or changes what it says. `render` only stops a message from faking kwak's own framing or hiding text from humans that a model would read; the name reset stops an agent from showing up as a human in Element. Other guards are explored in 8.1. Since 2026-11-12 the checks of decision 33 are built (5.16): they do block messages, because decision 33, later than decision 13, moved protection to checks. |
 | DV-13 | Goal "linked to the main account (mainly via naming)" | The owner name is the human's localpart (`@fcanela` gives owner `fcanela`). Only when the localpart does not fit the owner-name shape (dots, more than 32 characters, other characters) the admin gives an alias with `owner add <@human> as <name>`. | Agent names cannot hold every localpart: dots separate the parts of an agent name. The alias case is rare and visible in `owners`. |
-| DV-14 | Pinned "background resume off by default, opt-in per owner" | Background resume works only for Claude Code in the first build. The owner's setting applies to all their sessions, but Codex sessions are skipped until manual check M5b passes. | A Codex `exec resume` run keeps the shell tool, and `sandbox_mode="read-only"` does not restrict reads, so a stranger's reply could make an unattended run read `~/.ssh`. `-c features.shell_tool=false` may remove it [src], not measured. |
+| DV-14 | Pinned "background resume off by default, opt-in per owner" (per machine since decision 44) | Background resume works only for Claude Code in the first build. The machine's setting applies to all its sessions, but Codex sessions are skipped until manual check M5b passes. | A Codex `exec resume` run keeps the shell tool, and `sandbox_mode="read-only"` does not restrict reads, so a stranger's reply could make an unattended run read `~/.ssh`. `-c features.shell_tool=false` may remove it [src], not measured. |
 | DV-15 | Credentials point 5 (optional hardened mode, accepted in decision 28) | Hardened mode (the listener under its own OS user) is not built in the first build. The IPC keeps the seams for it (allowed caller uids and socket placement are parameters of `ipc.Listen`). | The listener's keyring needs a desktop session bus that a separate system user does not have, so hardened mode needs its own secret store and a provisioning change, both the maintainer's decisions. Section 12, Q15. |
-| DV-16 | 31 | Background resume stays an owner setting at the registrar (`set resume off\|replies\|all`, 3.5), with kwak's one fixed command (5.11). The machine-side setting with a default command and custom commands is designed, not built. | Decision 31 leaves open what kwak passes to a command and how a run's stop and wait work, so the setting stays at the registrar as the trigger until those are designed (build brief item 10). Decision 38 (2026-11-12) restates decision 31: *"How the software in the client machine behaves should be configurable by the client machine."* On responders: *"I will want to have Sonnet on normal for the responders, but this should be something configurable on client side."* Still not built: it waits for the owner's choices on the machine config. Section 1.6. |
+| DV-16 | 31, 44 | Built in its small version (decision 44): background resume is a machine setting, `kwak config resume off\|replies\|mentions\|all` (5.2, 5.11), with kwak's one fixed command (5.11). A default command the owner can copy and edit, custom commands, and decision 31's `open` trigger (a broadcast question) are designed, not built. | Decision 31 leaves open what kwak passes to a custom command and how a run's stop and wait work. Decision 44 (2026-11-12) took the small version: a setting per machine, off by default, the existing fixed command, custom commands later; *"The server setting should completely disappear."* `open` needs the responder, because an ended session never receives an open question (5.4, 5.12). Decision 38 (2026-11-12) had restated decision 31: *"How the software in the client machine behaves should be configurable by the client machine."* On responders: *"I will want to have Sonnet on normal for the responders, but this should be something configurable on client side."* Section 1.6. |
 | DV-17 | 36 ("a ⏸️ reaction, a log line and a line in `kwak status`"); 34 (a reaction when a message "is rejected (not passed validation)") | A status reaction is sent only while the session's agent still holds a token: in practice, while the session is open or within the 10 minute close grace after it ended. This covers ⏸️ (loop ceiling) and ⛔ (a held message). When the agent is already closed, the ceiling still gives the log line and the `kwak status` line, and a held message still gives the notice, the log line and the `kwak status` line, but there is no reaction. | A reaction is sent by the agent's own account (build brief item 7). A closed agent has left the room and has no token. Reopening it only to react would put it back in the room with no session behind it and no close planned, and the room's member list is what tells an asker that a session ended (decision 6). A real loop keeps the agent open, because each run reopens it. A message held for an ended session is a common case for the incoming checks: then the asker sees no ⛔ and learns only from the no-reply notice of 5.9. Sections 5.14, 5.15, 5.16, Q23. |
 | DV-18 | 33 ("the rejecting agent also posts a refusal in the thread so other agents have that context") | When a check stops a message, kwak posts nothing in the thread. The only sign in the agents room is ⛔ (5.14). The reason goes to the log, to `kwak status`, to the session, and, since decision 39, as a report to the report room (5.17). | A refusal written by kwak and posted in the thread with an agent's token would be text that agent never wrote. Nothing asks the session to post a refusal instead: the hold notice is a kwak notice, which carries none of the framing's answer or refusal lines (6.1), and it starts no run (Q26(2)). So in the thread the asker learns of a held message only from ⛔ (while the agent is open, DV-17) and from the no-reply notice of 5.9; people who read the report room see the hold there. A refused post goes back to the session as the tool's error, and that session may post a short note itself. Section 5.16, 5.17, Q26(7). |
 | DV-19 | 41 (*"I don't mind the reports including the text and also linking the thread"*) | When the **secrets scan** stopped a post or held a message, its report never holds the message text; it says that the scan stopped it and gives the kind of secret (the scan's fixed reason) and the link. Every other report (a check command's refusal or hold) holds the text and the link, as decision 41 says. | Showing the text would publish in the report room the secret the scan was there to stop. The report room is read by more people than the sender's and receiver's owners: the people the owner lets in, and (Q39) any paired machine of the server. A held message stays readable in the agents room through the link; a refused post was never posted anywhere. Section 5.17, Q36. |
@@ -215,7 +215,7 @@ Invariants, each with a test (section 10):
   pairing replaced by a confirmed re-pair of the same machine: its agent records move to the new
   pairing and their tokens stay valid (3.4).
 
-### 1.6 Decisions 31 to 43: what is built
+### 1.6 Decisions 31 to 44: what is built
 
 Decisions 31 to 36 (2026-11-11 and 2026-11-12) say how kwak reacts to messages. The overnight build
 of 2026-11-12 builds the well-defined parts in three batches, all on one branch: **A**, **B** and
@@ -242,7 +242,8 @@ and status reactions are separate Matrix events (5.14).
 | Status reactions (👀 ⏳ 💬 ⛔ ⏸️; no ✅) | 34, 35; build brief item 7 | built: 👀 ⏳ 💬 ⏸️ (batch B), ⛔ (batch C) | 5.14, 8 |
 | Checks: a built-in secrets scan, then an optional check command, outgoing (`send`, `reply`) and incoming (before an inbox) | 13 (secret shapes only), 33 (secrets first, then a command such as a cheap model); build brief item 8 | built (batch C). Both run in the listener (Q25). No default command is shipped. kwak posts no refusal in the thread (DV-18); since decision 39 each stop is also reported (5.17) | 5.16, 5.17, DV-18, Q25, Q26, Q27, Q28 |
 | ⛔ for a check: on a held incoming message; for a refused `reply`, on the messages its 💬 would mark | 34 ("is rejected (not passed validation)"); build brief item 7 | built (batch C); only from an agent that is still open (DV-17); a refused `send` has no message to mark (Q25) | 5.14, 5.16, DV-17 |
-| Background resume as a machine setting, with a default command and custom commands | 31 | designed, not built (DV-16) | 5.11 |
+| Background resume as a machine setting: `kwak config resume off\|replies\|mentions\|all` in `config.json`, kwak's fixed command, read with no restart, shown in `kwak status`; the registrar setting is gone (`set resume`, `resume` in `GET /me`) | 31, 44 | built (decision 44), the small version | 3.2, 3.4, 3.5, 5.2, 5.11, 5.13, DV-16, Q4, Q46 to Q49, `docs/deploy.md` section 12 |
+| Custom commands for background resume, and the `open` trigger (decision 31's "broadcast question") | 31, 44 | designed, not built: custom commands come later (decision 44); `open` needs the responder; `kwak config resume open` says it is not available yet | 5.11, DV-16 |
 | Waking an idle open session through its local socket | 32, 33 | designed, not built (needs a measurement first) | none yet |
 | Responders (`agent.<owner>.<hex>.responder`, a fresh session with tools) | 32, 33 | designed, not built | none yet |
 | Report room, listener side: a report for each check that refused a post or held a message, with the message text and a matrix.to link (never the text after the secrets scan, DV-19), and for the hourly limit on background runs; posted by the session's agent, else the pairing's listener account, through `POST /report/join`, and every poster leaves again; no cap on reports | 33, 36, 38, 39, 41, 42 | built (decision 39, listener side; text, link and no cap: decision 41; the listener account leaves too: decision 42; the text stays: decision 43); "refused action requests" have no check of their own yet: a check command that refuses actions is reported like any other check | 5.11, 5.16, 5.17, DV-18, DV-19, Q29, Q33, Q35, Q36, Q39 |
@@ -361,6 +362,27 @@ Decision 43 also answered Q39: *"Keeping the refusal message seems useful to qui
 situations like prompt injections, and it doesnt allow the infractor to modify their message"*. A
 report goes on holding the text a check command refused (5.17). DV-19 is unchanged: a stop by the
 secrets scan never holds the text.
+
+**Decision 44** (2026-11-12) moves background resume to each machine, as decisions 31 and 38
+asked: *"The server setting should completely disappear."* He took the small version: one `kwak
+config` setting per machine, off by default, with kwak's existing fixed command (5.11); custom
+commands come later. Built on the same branch:
+
+- `kwak config resume` writes `resume` in `config.json` (5.2): `off`, or a comma list of
+  `replies` (a reply in a thread the session started, what `set resume replies` did) and
+  `mentions` (the session's agent is mentioned outside its own thread; decision 31's word
+  "agent"). `all` is both. A missing key is off. The listener reads it before each synced batch,
+  like the incoming check command, so no restart is needed. `kwak status` shows it (5.11, 5.13).
+- Decision 31's "broadcast question" trigger, `open`, is not built. An ended session never
+  receives an open question (5.4, 5.12), so `open` needs the responder, which is not built either.
+  `kwak config resume open` says it is not available yet.
+- The registrar setting is gone: the bot has no `set resume` (it answers with where the setting
+  went, Q49), `settings` and `GET /me` have no `resume`, and the registrar drops the value from an
+  older `state.json` (3.2, 3.4, 3.5). An older kwak listener reads the missing value as off
+  (5.11). An owner who had sent `set resume replies` has background resume off after the update,
+  until `kwak config resume replies` runs on each machine (Q48).
+
+Builder choices are Q46 to Q49. Deploy order and rollback: `docs/deploy.md`, section 12.
 
 ---
 
@@ -770,8 +792,10 @@ thousands of records.
   name, which a same-kind re-pair does (3.10, decision 42). Records never stay behind on an old pairing, so no chain of
   `replaces` ever forms, and renewal does not depend on the client finishing.
 - Owners are keyed by owner name, which is the human's localpart unless an alias was given (DV-13).
-  Each owner has `settings` (background resume, question timeout), changed only by bot commands from
-  the owner's DM (3.5) and returned by `GET /me`.
+  Each owner has `settings` (the question timeout), changed only by bot commands from the owner's
+  DM (3.5) and returned by `GET /me`. A file written before decision 44 also has `resume` there,
+  the old background resume setting. The strict decoder still accepts the key, the registrar
+  ignores its value, and the next write leaves it out.
 - **Test pairings** (decision 40) carry `"test": true`. The key is written only when it is true, so
   a file with no test pairing has exactly the shape of the earlier build. Agent records get no new
   key: a session or helper agent is on the test side when its pairing is, and a test pairing's
@@ -800,6 +824,10 @@ thousands of records.
   gives out tokens on a closed per-owner account, and the new image closes only open per-owner
   records, so without a `pair <code>` that opens the record again those tokens are never logged
   out. `docs/deploy.md`, section 12, has the steps.
+- **Rollback after decision 44.** Nothing to change in the file: an older image reads `settings`
+  with no `resume` as an empty value, and its `GET /me` sends that, which every listener reads as
+  off. The value the owner had sent before decision 44 is lost; `set resume` works again in the
+  older image.
 
 ```json
 {
@@ -808,7 +836,7 @@ thousands of records.
   "owners": {
     "fcanela": {"human": "@alice:kwak.example.org", "alias": false, "added": "2026-11-03T10:00:00Z",
              "added_by": "@fcanela:...", "removed": null,
-             "settings": {"resume": "off", "question_timeout": "15m"}}
+             "settings": {"question_timeout": "15m"}}
   },
   "dms": {"@alice:kwak.example.org": "!dmRoom"},
   "pairings": {
@@ -927,7 +955,7 @@ thousands of records.
 | `POST /agents/close` | key | `{"user_ids":["@agent.fcanela...."],"reason":"session_ended"}` (at most 500) | `200 {"closed":["..."]}`. Only this pairing's non-standing agents; others get `403 KWAK_NOT_YOURS`. |
 | `POST /agents/alive` | key | `{"user_ids":["..."],"touch":true}` (at most 500; `touch` may be left out, meaning false) | `200 {"unknown":["..."],"closed":["..."]}`. With `touch`, sets `last_active` for this pairing's open agents; without it, only reports. |
 | `POST /unpair` | key | `{}` | `200 {}`. Revokes this pairing (3.9). |
-| `GET /me` | key | | `200 {"owner":"fcanela","pairing_id":"3f9a1c2e","machine":"laptop","key_expires_at":"...","agents_open":12,"settings":{"resume":"off","question_timeout":"15m"}}`; a test pairing also has `"test":true`. |
+| `GET /me` | key | | `200 {"owner":"fcanela","pairing_id":"3f9a1c2e","machine":"laptop","key_expires_at":"...","agents_open":12,"settings":{"question_timeout":"15m"}}`; a test pairing also has `"test":true`. Since decision 44 `settings` has no `resume`: background resume is set on each machine (5.11). An older listener reads the missing value as off. |
 | `POST /report/join` | key | `{"user_id":"@agent.fcanela.4f2a9c1e7b034d5a:..."}`: one of the caller's own accounts, an open session or helper agent of this pairing, or this pairing's own listener account | `200 {"room_id":"!..."}`: the account is now a member of the report room of the pairing's kind. Not one of the caller's accounts (another pairing's agent or listener account, a closed agent, an old per-owner standing account, a person, the bot, another server): `403 KWAK_NOT_YOURS`. No report room for this kind in `config.json`: `404 KWAK_NO_REPORT_ROOM`. Configured but not joined yet: `502 {"errcode":"KWAK_HOMESERVER","error":"M_NOT_FOUND"}`. The join or the invite failed: `502 KWAK_HOMESERVER` with tuwunel's errcode. |
 
 **Test pairings in the answers** (decision 40). For a test pairing, the claim answer has
@@ -1083,10 +1111,14 @@ may encrypt a new DM and the registrar has no end-to-end encryption.
 | owner | `machines` | The owner's pairings: id, machine, the word pair of its listener account (`as brave-heron`, decision 42), created, expires, last used, last IP. A test pairing shows `[test]` after its id. A pairing made before decision 42 shows no word pair until it gets one. |
 | owner | `agents` | Open agents per pairing, with last activity, all of them. A long reply is split at line ends into several notices, each far below the 64 KiB event limit. |
 | owner | `revoke <pairing-id>` / `revoke all` | Revokes (3.9). An owner may revoke only their own pairings. A suspected leak is handled with `revoke`, not with a re-pair: a re-pair keeps the agents alive. |
-| owner | `set resume off\|replies\|all` | Background resume for all of this owner's machines (5.11). Codex sessions are skipped until M5b passes (DV-14). Reply: "Background resume is now replies. It takes effect on your machines within an hour." |
 | owner | `set question-timeout <duration>` | The "no reply" notice time (5.9), between 1 minute and 24 hours. |
-| owner | `settings` | The owner's settings. |
+| owner | `settings` | The owner's settings: "Question timeout: 15m." |
 | anyone known | `help` | The commands for that person's role. |
+
+Background resume is not a bot command since decision 44: it is set on each machine with `kwak
+config resume` (5.11), and `help` does not list it. An owner who still sends `set resume <anything>`
+gets "Background resume is no longer set here. Set it on each machine with: kwak config resume",
+and nothing is stored (Q49).
 
 Unknown senders get one line: "You are not on the kwak owner list. Ask the server admin." A wrong code gets
 "No pairing with that code. Codes expire after 10 minutes; run kwak pair again." The self-reported
@@ -1484,7 +1516,8 @@ get your key. Two risks remain, and both are covered:
 5. `POST /standing` gives the standing token (memory only) and the account it belongs to: the
    pairing's own listener account (decision 42). The listener uses that `user_id` for reports and
    shows it in `kwak status`; it never uses `config.json`'s `standing_user`, which is what the
-   claim named and may be out of date (Q44). `GET /me` gives the owner's settings,
+   claim named and may be out of date (Q44). `GET /me` gives the owner's settings (the
+   question timeout; background resume is a machine setting since decision 44, 5.11),
    cached in `state.json` and fetched again every hour and at each alive ping, so a `set` in the bot
    DM takes effect within an hour (the bot reply says so; `kwak pair` or a restart applies it at
    once). Load `state.json` (same version rule as `config.json`).
@@ -1567,19 +1600,30 @@ session keys, never tokens or message bodies.
  "keyring_user":"kwak.example.org/3f9a1c2e/owner-key",
  "resume_max":10,
  "resume_exe":{"claude":"/home/<you>/.local/bin/claude"},
+ "resume":["replies"],
  "thread_ceiling":50,
  "check_outgoing":"/home/<you>/.config/kwak/check-out",
  "check_incoming":"/home/<you>/.config/kwak/check-in"}
 ```
 
-- `config.json` holds only machine facts. The owner's settings (background resume, question
-  timeout) live at the registrar and change only through the bot DM (3.5), so a session that can
-  write this file cannot turn background resume on. `resume_max` is a machine bound (DV-11). A
+- `config.json` holds only machine facts and machine settings, never a secret. The owner's
+  settings (the question timeout) live at the registrar and change only through the bot DM (3.5).
+  Background resume is a machine setting since decision 44 (`resume`, below), so a process of the
+  owner's user that can write this file, a session with a shell tool included, can turn
+  background resume on (Q47). `resume_max` is a machine bound (DV-11). A
   missing or zero `resume_max` means 10. `kwak pair` writes the value into the file and a re-pair
   keeps the old value, so a machine paired before 2026-11-12 keeps `"resume_max":2` until the owner
   edits the file. No kwak command sets `resume_max`, so a stored 2 is almost always the value `kwak
   pair` wrote, not a choice of the owner; kwak cannot tell the two apart. The listener reads the
   file at start and at each `reload` (5.1). Section 12, Q20.
+- `resume` is this machine's background resume triggers (5.11, decision 44): a list of `replies`
+  and `mentions`, for example `["replies"]`. Missing or empty is off. Only `kwak config resume
+  off|<triggers>` writes it (`all` is stored as both words, Q46); `kwak pair` does not, and a
+  re-pair keeps it. The listener reads it before each synced batch and when an incoming check
+  ends, not only at start, so a change needs no restart; when the file cannot be read it keeps the
+  value read last. A word this kwak
+  does not know is ignored. An older kwak ignores the key and keeps it when it saves the file; it
+  reads background resume only from `GET /me` (3.4). Added 2026-11-12 (decision 44).
 - `standing_user` is the listener account the claim named (3.4). It is for people only: the
   listener syncs and reports as the account `POST /standing` names (5.1), because a pairing made
   before decision 42 has the old per-owner name here, and the registrar may rename an account
@@ -1609,7 +1653,8 @@ session keys, never tokens or message bodies.
 - `server` must start with `https://` (I4).
 
 - **`state.json`** (`paths.StateDir()`, 0600, not secret): `version`, `next_batch`, `last_event_id`,
-  the cached owner settings, sessions, inboxes, held messages, delivered ids, `roots` (event id →
+  the cached owner settings (a `resume` cached before decision 44 is ignored and dropped at the
+  next save), sessions, inboxes, held messages, delivered ids, `roots` (event id →
   agent), `threads` (root → latest event id), own event ids, pending questions (5.9) with
   `asked_at` and `due` (`questions` for those sent with mentions, `open_questions` for those sent
   with none), and the wall-clock deadlines of 5.8, plus the progress of a running back-fill (5.3), and
@@ -2041,22 +2086,40 @@ one, DV-2), then one retry with a new txnId.
    move to the parent session's inbox, labelled "for your helper tests, which has finished". The
    helper is closed with the session, not at SubagentStop, so a later reply still has a home.
 
-### 5.11 Background resume (opt-in per owner, off by default)
+### 5.11 Background resume (opt-in per machine, off by default)
 
-**DEVIATION (decision 31): the setting stays at the registrar, with one fixed command, because what
-kwak passes to a custom command and how a run stops and waits are not designed yet (DV-16).**
-Set by the owner in the bot DM with `set resume off|replies|all` (3.5). The listener reads it from
-`GET /me` (at start, then hourly, 5.1) and caches it; `kwak config resume` only prints that instruction. So neither the owner key
-nor a process on the machine can turn it on. When an owner turns it on, `replies` is the recommended
-setting (section 12, Q4). `replies` resumes for any room member's reply in a thread this session
-started: thread roots are public and anyone may reply, so `replies` does not mean "only the agents
-the session asked". `all` also resumes on new mentions. Volunteered open questions never trigger a
-resume.
+**DEVIATION (decision 31): one fixed command and no `open` trigger, because what kwak passes to a
+custom command and how a run stops and waits are not designed yet, and `open` needs the responder
+(DV-16).** Set on each machine with `kwak config resume` (decision 44), which writes `resume` in
+`config.json` (5.2). The listener reads it before each synced batch, with the incoming check
+command (5.16), so a change needs no restart and applies to messages that arrive after it. A
+message that waits for its incoming check uses the value read when its check ends. When the file
+cannot be read, the listener keeps the value read last. The triggers:
+
+- `replies`: a reply in a thread this session started, whatever Route ranked it, or a message
+  Route ranks `your_thread` (5.4). Thread roots are public and anyone may reply, so `replies` does
+  not mean "only the agents the session asked". The recommended setting (section 12, Q4).
+- `mentions`: a message that mentions the session's agent outside its own thread (decision 31's
+  word "agent"). A reply in its own thread that also mentions it counts as `replies`.
+- `all`: both. `kwak config resume all` stores `["replies","mentions"]` (Q46).
+- `off`, or no key: never. The default.
+- `open` (decision 31's "broadcast question"): not available yet. Route gives an open question only
+  to live volunteers (5.4, 5.12), so no ended session ever holds one. It needs the responder of
+  decisions 32 and 33 (a fresh session in a configured folder), which is not built.
+  `kwak config resume open` says so and changes nothing.
+
+Before decision 44 the owner set it in the bot DM with `set resume off|replies|all`, for all their
+machines, and the listener read it from `GET /me`. That setting is gone (3.5): any process of the
+owner's user can now turn background resume on (Q47), and a machine is off until `kwak config
+resume` runs on it (Q48). An older kwak listener still reads it from `GET /me`: the registrar no
+longer sends `resume`, the listener decodes the missing field as an empty value, and an empty value
+starts no run (its trigger acts only on `replies` and `all`; any other value returns). Its
+cached value is replaced at its next `GET /me`, at start or within the hour.
 
 **DEVIATION (pinned "background resume opt-in per owner"): only Claude Code sessions are resumed in
 the first build, because a Codex run keeps its shell tool and `read-only` does not restrict reads
 (DV-14).** The listener skips Codex sessions until manual check M5b passes, and `kwak status` says
-"background resume: Claude only".
+"Background resume on this machine: replies (Claude Code sessions only); 0 runs, 0 running".
 
 - **Trigger:** a matching item lands in the inbox of an ended session that has no live MCP connection.
 - **Supervision:** wait 30 s to batch arrivals (`resume_due`, 5.8). At most one run per session at a
@@ -2220,12 +2283,14 @@ kwak unpair [--force]           revoke this pairing, then delete the key, config
 kwak listen                     the daemon (the service runs this)
 kwak install | uninstall        the user service (section 7); install also restarts a running listener
 kwak status                     pairing, listener account, key expiry, listener and sync state, sessions, inbox sizes, resumes,
-                                the hourly limit while it holds (5.11), threads at the loop ceiling (5.15),
+                                this machine's background resume triggers and the hourly limit while it
+                                holds (5.11), threads at the loop ceiling (5.15),
                                 the checks and what they stopped (5.16)
 kwak inbox                      waiting items per session, with the command that resumes each session
 kwak doctor                     bus, keyring, socket and listener account, `kwak` on PATH, plugin present, Codex
                                 hook trust and Windows hook shell (read-only)
-kwak config resume              prints how to set background resume in the bot DM (3.5)
+kwak config resume [off|<triggers>]  shows or sets this machine's background resume: off, or replies,
+                                mentions or all, comma separated (5.11, decision 44); open is not available yet
 kwak config resume-exe          records the absolute path of claude for background resume
 kwak config resume-per-hour <n>  records the most background runs started per hour on this machine (5.11)
 kwak config check-outgoing <path|off>   records or turns off the outgoing check command (5.16)
@@ -2340,13 +2405,13 @@ never built; nothing is added to message content (decision 22). Added 2026-11-12
 - **Reset.** A message in that thread from a person, that is a sender that is not an agent
   (`@agent.*`) and not the registrar bot, sets the thread's count back to zero (decision 36, a
   default the maintainer may change). Reactions never reset it (5.3). After a reset, every ended
-  session that still holds messages of that thread is checked again against the owner's resume
-  setting, as when those messages came in (5.11), so a paused session can run again even when
+  session that still holds messages of that thread is checked again against the machine's resume
+  triggers, as when those messages came in (5.11), so a paused session can run again even when
   the person's message does not reach it. Resetting the count when the owner types in a session
   in the thread is designed, not built (1.6).
 - **What it does not catch.** The count is per thread, and every `send` starts a new thread. Two
   agents that answer each other only with new `send` messages that mention each other (possible
-  under `set resume all`) start one run per new thread and never reach the ceiling. Under
+  with `mentions` on) start one run per new thread and never reach the ceiling. Under
   `replies` this needs a reply in a thread the session started, so it does not happen. Section
   12, Q23 (5).
 - **Saved.** The counts are in `state.json` as `turns` (5.2), so a restart keeps them. A count is
@@ -3238,7 +3303,7 @@ guards in this sense: they block nothing and change no words a person sees (DV-1
 | Key used from a new IP | Notice in the owner's DM (3.4). | "Key for laptop (3f9a1c2e) used from <ip>. If that is not you, send: revoke 3f9a1c2e". |
 | Someone else's code sent by another owner | `kwak pair` discards the pairing (4, step 5). | "this code was sent by owner X, not by you". |
 | Huge inbox | Budget per delivery, rest at the next hook. | "N more messages are waiting". |
-| Two agents keep answering each other | One continuation per turn end (DV-3). For background runs, the loop ceiling: no run for a thread after 50 automatic turns on this machine (5.15). It counts per thread, so a loop through new `send` threads under `set resume all` is not caught (Q23). | The turn ends; the rest arrives at the next prompt or tool call. After the ceiling: ⏸️ on the waiting messages (from an agent that is still open), a log line, a `kwak status` line; the messages wait for the owner. A person's message in the thread starts the count again. |
+| Two agents keep answering each other | One continuation per turn end (DV-3). For background runs, the loop ceiling: no run for a thread after 50 automatic turns on this machine (5.15). It counts per thread, so a loop through new `send` threads with `mentions` on is not caught (Q23). | The turn ends; the rest arrives at the next prompt or tool call. After the ceiling: ⏸️ on the waiting messages (from an agent that is still open), a log line, a `kwak status` line; the messages wait for the owner. A person's message in the thread starts the count again. |
 | The owner opens a session while its background run is going | The listener stops the run inside the SessionStart hook and waits for it to exit, at most 7 s (5.11). | The opened session gets the messages the run had not printed, and one notice naming the threads of those it had printed. If the run does not stop in 7 s, the session is not linked, as before (log line). |
 | A status reaction fails (homeserver error, agent closed) | Logged; nothing else changes (5.14). | The reaction is missing in Element. |
 | An agent's `send` or `reply` holds a secret, or the outgoing check command refuses it | Nothing is posted. ⛔ on the messages a refused `reply` answered; a log line; a `kwak status` line (5.16). | Tool: "Not sent: it looks like it holds a secret (a GitHub token). ..." or "Not sent: the outgoing check refused it. Reason: ...". The secret is never repeated. |
@@ -3336,6 +3401,13 @@ guards in this sense: they block nothing and change no words a person sees (DV-1
     without strict MCP; cwd, debounce, one per session, `resume_max` with an extra run waiting for a
     free slot, no message text in argv, Codex sessions skipped, log file named from hex); a missing
     `resume_max` is 10 (`wire`) and `kwak pair` writes 10 (`cli`);
+  - background resume triggers from `config.json` (decision 44): off, `replies`, `mentions` and
+    both; words it does not know start nothing; a reply in the session's own thread that mentions
+    it is `replies`, not `mentions`; an open question never starts a run; a change applies at the
+    next batch with no restart; a file that cannot be read keeps the triggers read last; `kwak
+    status` shows them; a message that waits for its incoming check uses the triggers read when the
+    check ends (`TestResumeTriggers`, `TestResumeSetOnTheMachine`,
+    `TestResumeTriggersReadWhenTheCheckEnds`);
   - the hourly limit (decision 38): with `resume_per_hour` 2 and free slots, a third run waits,
     also after the first two ended, and starts when the oldest start is an hour old; one log line;
     `kwak status` shows the limit and the next start while it holds, and nothing after; a missing
@@ -3433,7 +3505,7 @@ guards in this sense: they block nothing and change no words a person sees (DV-1
     of a pairing with no name logs nothing out and counts the logout as done; against tuwunel, the
     closed per-owner account's sync gets `M_UNKNOWN_TOKEN` and it leaves the agents room;
   - transactions: hs_token in header, query, both mismatching, missing; txn dedupe; `done_events`;
-    a forged admin command, `pair`, owner `revoke all` or `set resume all` ignored when `FetchEvent`
+    a forged admin command, `pair`, owner `revoke all` or `set question-timeout` ignored when `FetchEvent`
     disagrees; commands outside the recorded DM ignored; encrypted-room invite gets notice, leave and
     a new DM; an invite of `@registrar` to the agents room from an admin with no DM is not a DM
     (the bot stays, nothing is recorded);
@@ -3445,8 +3517,11 @@ guards in this sense: they block nothing and change no words a person sees (DV-1
     returned with no invite; a pairing of the other kind is a new pairing: it replaces nothing,
     moves no agent, revokes nothing, and its reply ends with one line naming the earlier pairing
     and the `revoke` command;
-  - every outbound request carries `X-Forwarded-For`.
-- **`registrar.Store`:** atomic rename, reload, refusal of a corrupt file.
+  - every outbound request carries `X-Forwarded-For`;
+  - decision 44: `set resume <anything>` stores nothing and points to `kwak config resume`, `help`
+    does not name resume, and `GET /me` and `settings` show only the question timeout.
+- **`registrar.Store`:** atomic rename, reload, refusal of a corrupt file; a `state.json` from
+  before decision 44 with `settings.resume` loads, and the next write leaves `resume` out.
 - **`hook`:** `session-start` still prints a reply that comes after more than 3 s (it waits up to
   9 s, under Claude's 10 s hook timeout); for each harness and event, given stdin and a canned reply, the **exact stdout bytes**,
   including Claude `PostToolUseFailure`. Empty inbox: `len(stdout) == 0`. Listener down: exit 0, 0
@@ -3494,7 +3569,11 @@ guards in this sense: they block nothing and change no words a person sees (DV-1
   line and one line per stopped message; `config resume-per-hour` records a whole number of 1 or
   more, refuses 0, a negative, a fraction and a word without changing the file, and keeps other
   fields; `kwak pair` does not write `resume_per_hour` and a re-pair keeps it; `kwak status` prints
-  the hourly limit line. Decision 40: `kwak pair` writes `keyring_user` and its own item; a test
+  the hourly limit line. Decision 44: `config resume` shows the triggers, stores a comma list in
+  full (`all` as `replies` and `mentions`), removes the key on `off`, refuses `open` ("not
+  available yet"), `off` with another word and unknown words without changing the file, calls
+  neither the registrar nor the listener, and keeps other fields; a re-pair keeps `resume`; `kwak
+  status` prints the background resume line. Decision 40: `kwak pair` writes `keyring_user` and its own item; a test
   pairing next to a real one (two config dirs, one keyring) leaves the real key alone, also on
   `kwak unpair`; a re-pair moves to the new item and removes the old one, and a failed re-pair keeps
   the old one; a re-pair of one of two folders that an older kwak paired on one keyring keeps the
@@ -3612,7 +3691,7 @@ gate and goes to the maintainer with the measured answer.
 | E12 | wrong `hs_token`; right token with an invented admin event | 403; command ignored |
 | E13 | bob DMs `revoke all` | bob's agent tokens dead, agents left the room, bob's listener unpaired, tools say so |
 | E14 | graceful listener restart mid-run (SIGTERM) | no duplicate delivery, no loss; tokens re-minted; same names |
-| E15 | alice opts into background resume; A ended; B replies in A's thread | the `Runner` double gets exactly one run, right argv and cwd, no message text in argv |
+| E15 | alice runs `kwak config resume replies` on her machine (decision 44); A ended; B replies in A's thread | the `Runner` double gets exactly one run, right argv and cwd, no message text in argv |
 | E16 | I1 scan over everything captured | no token or key string in any hook or MCP output |
 | E17 | two of alice's sessions on one listener: A1 asks A2 by mention, A2 answers in A1's thread; then A1 creates helper `tests` and the helper and A1 do the same | each message reaches the other agent only, never its sender (the deploy step 9 first test) |
 | E18 | two sessions start at once in one cwd while held messages wait for an ended session there | the items move once, to the earlier one; the ended session's later resume shows the hand-over note |
@@ -3666,7 +3745,7 @@ Live run, 2026-11-12, on the maintainer's machine with the listener of this bran
 sessions only (details in the build notes, not in the repo): M9, M10, M13 and M14 pass. M3 steps 2
 and 3 pass (by hand, the strict argv, a test prompt); steps 4 to 6 (the fixed prompt) were not run. M12 steps 1 and 2 (👀 and 💬) pass. M15 steps 1 to 4 pass; step 5 (an
 incoming secret) was not run, because a sender on the same machine is stopped first by the outgoing
-scan. Not run: M11 and M12 steps 3 to 7, which need background resume on (an owner setting, 3.5),
+scan. Not run: M11 and M12 steps 3 to 7, which need background resume on (a machine setting since decision 44, 5.11),
 and the reset by a person. Reactions were read from the log line "reaction sent" (5.14), not seen in
 Element.
 
@@ -3822,7 +3901,7 @@ decisions, by the pinned facts, or by the judges' consensus.
 | Q1 | DV-2: the owner key can get a fresh token for an existing agent of its own pairing. The glossary says the key "cannot act as them". The real trade-off: a session can read the keyring with no prompt, but on Linux it cannot read the listener's memory (`ptrace_scope = 1`, measured), probably not on macOS either (not measured), while on Windows it usually can. With (a), a session that reads the key can take over any agent of that machine, including other sessions' agents, and can keep doing it from anywhere until the key is revoked or expires. | (a) re-mint for the same pairing only, with the new-IP and re-mint notices of 3.4 (this spec); (b) one keyring item per open agent token, deleted at close, so no re-mint is needed (the live count is the open agents of one machine, not 2,800; per-OS item limits are not measured, and a session that reads the keyring then reads every token directly and silently, which is no narrower than (a)); (c) no re-mint at all: a lost token means a new, longer name (the key can still create new agents of the owner, but cannot take over an existing one; breaks decision 28's "a resumed session keeps its name" after a listener restart, and after 4 restarts the ladder runs out). | **(a) with the notices.** (b) moves the same exposure into the keyring and makes it silent; (c) keeps the glossary literal but costs names on every restart. Update the glossary to "can create agents and re-mint its own machine's agents, but cannot act as other machines' agents". His call. |
 | Q2 | DV-3: should the end-of-turn hook continue a turn more than once in a row? | (a) at most once, then wait for the next prompt or tool call (this spec); (b) always, as decision 13 reads literally (Claude stops at 8, Codex never). | **(a).** It limits a loop, not content, and it protects decision 19 (cost). |
 | Q3 | DV-4: Codex end-of-turn delivery. | (a) a fixed notice; the text arrives with the next tool result (this spec); (b) the framed text in `reason`, which Codex treats as a user-role prompt; (c) no Codex Stop hook. | **(a).** Other people's text never speaks with the user's voice. |
-| Q4 | Background resume, once an owner opts in. | `replies` (any room member replying in a thread this session started: roots are public, so it is not limited to the agents the session asked) or `all` (also new mentions); kwak tools only (`--tools ""`, this spec) or a read-only built-in set (Read, Grep, Glob reach the cwd's `.env` and more); Codex: off until M5b shows `features.shell_tool=false` removes every tool that reads files (DV-14), or off for good. | **`replies` with kwak tools only, Claude only until M5b passes.** Any room member can trigger a `replies` run, so the run must not be able to read the disk. "kwak tools only" needs more than `--tools ""`: other MCP servers stay and `--allowedTools` fences nothing under `defaultMode: auto` (measured 2026-11-12), so the run also uses `--permission-mode dontAsk` and strict MCP (5.11, Q22). |
+| Q4 | Background resume, once an owner opts in. | `replies` (any room member replying in a thread this session started: roots are public, so it is not limited to the agents the session asked) or `all` (also new mentions); kwak tools only (`--tools ""`, this spec) or a read-only built-in set (Read, Grep, Glob reach the cwd's `.env` and more); Codex: off until M5b shows `features.shell_tool=false` removes every tool that reads files (DV-14), or off for good. | **`replies` with kwak tools only, Claude only until M5b passes.** Any room member can trigger a `replies` run, so the run must not be able to read the disk. "kwak tools only" needs more than `--tools ""`: other MCP servers stay and `--allowedTools` fences nothing under `defaultMode: auto` (measured 2026-11-12), so the run also uses `--permission-mode dontAsk` and strict MCP (5.11, Q22). **Answered by decision 44 (2026-11-12):** background resume is set on each machine with `kwak config resume off|replies|mentions|all` (5.11). The rest stands: `replies` is still the recommended trigger, with kwak tools only, Claude only until M5b passes. |
 | Q5 | Owner-key lifetime and renewal (decision 10). | (a) 90 days, renewed by running `kwak pair` again after a bot warning 14 days before (this spec); (b) 90 days, renewed automatically by the listener, old key valid until the new one is used, with reuse detection; (c) no expiry, revoke only. | **(a)** to start, as decision 10 says. Move to (b) if re-pairing every 90 days annoys people. |
 | Q6 | Where "the next session" is (decision 6 default), for a message whose session ended and is not resumed. | (a) the next session started in the same project directory, moved once, with a note left for the original session (this spec); (b) any next session of that machine; (c) only a resume of that same session. | **(a).** The same directory is most likely the same work. |
 | Q7 | Windows caller checks, if no peer-PID call works there (M8 checks `SIO_AF_UNIX_GETPEERPID` first; if it works, this question is moot). | (a) accept the client-sent chain, marked "claimed"; (b) refuse Windows until a real check works. | **(a).** Same-user code is not a boundary anyway, and (b) blocks his Windows teammates. |
@@ -3832,7 +3911,7 @@ decisions, by the pinned facts, or by the judges' consensus.
 | Q11 | Windows console window at logon. | (a) Run key, `--detach` relaunch without a window (a brief flash; this spec); (b) a second GUI-subsystem binary for the listener; (c) a logon scheduled task (uncertain for standard users). | **(a)**, tested by whichever teammate uses Windows. |
 | Q12 | Registrar image delivery. | (a) built on the Matrix host from a pinned git tag (this spec); (b) pushed to a registry and pinned by tag, as the tuwunel image is pinned. | **(a)** while there is one server and no registry in place; (b) if a registry already exists. |
 | Q13 | Repo visibility, licence, and CI. | Public with MIT, or private (then `go install` needs `GOPRIVATE` and git credentials on every coworker's machine); GitHub Actions unit tests on ubuntu, macos, windows or none. | **Public, MIT, with the Actions matrix**: nothing in the code is secret, and macOS and Windows code paths are otherwise untested at runtime. |
-| Q14 | DV-10, decision 21 ("leave an agent reacting to things", "or an owner's standing agent"): how an owner leaves an agent reacting to open questions. | (a) a long-lived session with `volunteer on` does it (this spec, nothing to build); (b) an opt-in, per-owner standing volunteer: the listener starts a headless session (kwak tools only, like 5.11) for each open question, off by default; (c) like (b) but it resumes one chosen session instead of starting new ones. | **(a) for the first build, (b) later** if owners want answers while nobody has a session open. (b) costs a billed run per open question, so it needs its own bound (decision 19). |
+| Q14 | DV-10, decision 21 ("leave an agent reacting to things", "or an owner's standing agent"): how an owner leaves an agent reacting to open questions. | (a) a long-lived session with `volunteer on` does it (this spec, nothing to build); (b) an opt-in, per-owner standing volunteer: the listener starts a headless session (kwak tools only, like 5.11) for each open question, off by default; (c) like (b) but it resumes one chosen session instead of starting new ones. | **(a) for the first build, (b) later** if owners want answers while nobody has a session open. (b) costs a billed run per open question, so it needs its own bound (decision 19). Decision 44 (2026-11-12) records the `open` trigger of decision 31 as pending the responder, which is close to (b) (5.11, DV-16). |
 | Q15 | DV-15, Credentials point 5: hardened mode (the listener under its own OS user). | (a) defer to after the first build (this spec; the IPC seams are in place, 7.5); (b) build it now, with a 0600 key file owned by the `kwak` user instead of the keyring (the OS user is the boundary there), plus a provisioning change for the owner's machines. | **(a).** Its secret store breaks the pinned "never in files" rule, so it needs the maintainer's explicit word, and it only serves his own machines. |
 | Q16 | A machine that stays off past key expiry, or was revoked and re-paired, has old agent records on a revoked pairing, so its resumed sessions get `KWAK_NOT_YOURS` (5.1) and must start new sessions. | (a) leave it so (this spec); (b) accept an expired, never revoked key as proof for `replaces`, up to `prune_closed_after` (90 days), so a late renewal still moves the records; (c) an owner bot command `adopt <old-pairing> <new-pairing>` that moves records between two of the owner's own pairings, re-checked with `FetchEvent`. | **(b)**, since an expired key was never reported as leaked; **(c)** only if owners ask, because it can undo a revoke. Both change what an old key proves, so they are his call. |
 | Q17 | A first guard from 8.1: `send` and `reply` refuse a text that contains this machine's exact owner key. | (a) no guard (decision 13, the first build); (b) build it: one comparison in the tool handler, no false positives; (c) the wider secret-shape scanner of 8.1. | **Answered by decision 33 (2026-11-12):** (c) is built as the secrets scan of 5.16, and its `kwak_ok_` shape covers the owner key of any machine, this one's included. (b) would add nothing. |
@@ -3841,7 +3920,7 @@ decisions, by the pinned facts, or by the judges' consensus.
 | Q20 | `resume_max` on machines paired before 2026-11-12 holds 2 in `config.json` (5.2), so decision 35's 10 reaches only new pairings. No kwak command sets the value: the stored 2 was written by `kwak pair` as kwak's default, but kwak cannot tell it from a hand edit. | (a) leave it; the owner edits the file (this spec as built); (b) the listener treats a stored 2 as the old default and uses 10 (a hand-set 2 is lost); (c) `kwak pair` stops writing `resume_max`, plus a `kwak config resume-max <n>` command, so only a value the owner set is stored. | **His call**, a morning choice: changing what a stored value means was not decided. (a) is what is built; with (a), a machine paired before keeps 2 runs at once until its `config.json` is edited. (b) applies decision 35 everywhere at once; (c) fits the machine-side reaction config of decision 31. |
 | Q21 | "You win" (5.11): what the opened session gets for the messages the stopped run had already printed. They look handled there ("No response requested." after the run's prompt) and may have no answer. | (a) print them again as if never delivered; (b) one notice that names their threads, like the hand-over notice (this spec as built); (c) nothing. | **(b)**, his to confirm: it is short and honest, and the session reads the threads with `thread`. (a) shows the same text twice when the run did answer; (c) leaves the owner with messages that look handled. |
 | Q22 | The tool fence of a background run (5.11). | (a) `--permission-mode dontAsk` only, with the plugin's tool names; (b) (a) plus strict MCP with a kwak-only server and the `mcp__kwak__*` names (this spec as built). The kwak-only server is the plugin's entry, `kwak` found on `PATH`, passed inline; it could also be a file the listener writes, or the listener's own absolute path. | **(b)**, his to confirm: both fence the run; (b) also drops the other servers' tools from the request, which made a cold run about $0.10 instead of $0.55. It ran end to end once; one earlier run saw a "disconnected" kwak server and called no tool. If M3 shows that again, set `resumeStrictMCP` to false, which gives (a). |
-| Q23 | Loop ceiling details (5.15) that the build had to choose. | (1) A run needed by a thread under the ceiling while another waiting thread is at it: run for the thread under it only, keep the other thread's messages from the run and hold them for the owner (this spec, since the review of 2026-11-12; build brief item 6), or run and count both (the first batch B build), or run for both without counting the one at the ceiling. (2) ⏸️ on each waiting message of a thread at the ceiling (this spec), or only on the newest. (3) ⏸️ only from an agent that is still open (DV-17), or reopen a closed agent to react. (4) The default of 50, kept out of `config.json` until the owner writes it (this spec), or written by `kwak pair` like `resume_max`. (5) Two agents answering each other only with new `send` threads under `set resume all` never reach a per-thread ceiling: leave it (this spec), or add a second count per session or per agent pair as a backstop. | **As built**, his to confirm. (1) follows "no more background runs for that thread" while the other thread still gets its run; (2) each of those messages would have started a run; (3) a reopened agent would stay in the room with no session; (4) avoids the stored-default problem of Q20; (5) **answered by decision 37 (2026-11-12):** no second count per session or per pair; a cap on background runs per hour is the fallback against abuse, built by decision 38 as `resume_per_hour` (300, 5.11). |
+| Q23 | Loop ceiling details (5.15) that the build had to choose. | (1) A run needed by a thread under the ceiling while another waiting thread is at it: run for the thread under it only, keep the other thread's messages from the run and hold them for the owner (this spec, since the review of 2026-11-12; build brief item 6), or run and count both (the first batch B build), or run for both without counting the one at the ceiling. (2) ⏸️ on each waiting message of a thread at the ceiling (this spec), or only on the newest. (3) ⏸️ only from an agent that is still open (DV-17), or reopen a closed agent to react. (4) The default of 50, kept out of `config.json` until the owner writes it (this spec), or written by `kwak pair` like `resume_max`. (5) Two agents answering each other only with new `send` threads with `mentions` on (`set resume all` before decision 44) never reach a per-thread ceiling: leave it (this spec), or add a second count per session or per agent pair as a backstop. | **As built**, his to confirm. (1) follows "no more background runs for that thread" while the other thread still gets its run; (2) each of those messages would have started a run; (3) a reopened agent would stay in the room with no session; (4) avoids the stored-default problem of Q20; (5) **answered by decision 37 (2026-11-12):** no second count per session or per pair; a cap on background runs per hour is the fallback against abuse, built by decision 38 as `resume_per_hour` (300, 5.11). |
 | Q24 | A background run when the listener crashes (5.11). Each run is in its own process group, so the listener's death does not stop it. systemd kills it with the unit's control group; launchd and a foreground `kwak listen` do not, and the run finishes its one turn with no 15 minute limit and no "you win". | (a) leave it (this spec); (b) on macOS, start runs in the listener's own process group again, so launchd's kill of that group reaches them, and lose the group kill of a wrapper's child; (c) on start, find and stop runs left by an earlier listener (needs their pids in `state.json`). | **(a)**, his to confirm: a crash is rare and a `claude -p` run ends after one turn; (c) is the full fix if it matters. A normal shutdown waits for the runs (5.11). |
 | Q25 | Where the outgoing checks run, and where the ⛔ of a refused post goes (5.16, build brief items 7 and 8). | Place: (a) in the listener's `send` and `reply` handler, after the input checks and before any mint or post (this spec as built); (b) in `kwak mcp` before it forwards the call, where build brief item 8 put it (the brief's choice, not decision 34's); (b) runs the command with the session's environment, but needs `kwak mcp` to read `config.json` and a new IPC message so the log, `kwak status` and ⛔ still happen. ⛔: (1) on the messages a refused `reply` answered, the ones its 💬 would mark, once each (as built); (2) on the thread root; (3) nowhere. A refused `send` has nothing to mark either way. | **Place answered by decision 37 (2026-11-12): (a).** ⛔ **(1)**, his to confirm. `kwak mcp` only forwards the call, and the listener does the post, so (a) is the same tool call with one place for the log, the status and the reaction. (1) tells the asker that an answer was attempted and stopped. |
 | Q26 | Check details that the build had to choose (5.16). | (1) Waits: 10 s outgoing (under the MCP server's 25 s), plus up to 10 s to read the thread root of a refused `reply`, 30 s incoming; at most 4 incoming commands at once. (2) The hold notice starts no background run (as built), or it does, so a closed session can tell the asker. (3) Messages from this machine's own agents are checked again on the way in (as built), or skipped. (4) A held answer still stops the no-reply notice of 5.9 (as built). (5) No way to send a refused post anyway (as built), or an override such as a `force` field. (6) After a rollback to an older kwak, messages waiting in `checking` are never delivered (as built), or the listener could drain `checking` at shutdown. (7) No refusal post in the thread (DV-18), or kwak posts a short fixed refusal with the agent's token, or the hold notice asks the session to post a short refusal itself (only an open session would see it, since the notice starts no run). (8) **Answered by decision 38 (2026-11-12):** the keyword rule gives fewer false positives. The key name must end with the keyword, and the value of a `password=` / `token=` / `secret=` assignment or a `Bearer` value counts only when it looks random: 16 or more characters, letters and digits, at least 10 different characters, not a word slug; a `0x` value with 40 hex digits never counts, and one with 64 counts only after a private key, secret or password name (5.16). A long passphrase of letters only still passes. (9) An unreadable `config.json` keeps the check commands read last (as built), or every post and message is refused while the file cannot be read. | **As built**, his to confirm. (2) a held message usually needs no answer, and a run costs money; (5) an override is what a prompt-injected session would use; (7) waits for the report room (decision 33); (8) answered, see the cell before; (9) a broken file is rare (writes are atomic) and should not stop all traffic. |
@@ -3864,3 +3943,7 @@ decisions, by the pinned facts, or by the judges' consensus.
 | Q43 | `listener` as a helper name (decision 42). | As built: refused for new helpers (`wire.ValidHelper`, `POST /agents` answers `400`), because `agent.<owner>.<hex>.listener` would look like a listener account to a person, though not to the parser (its middle part is hex). A helper of that name made before still parses and closes normally. Other option: allow it, since the parser never confuses the two. | **As built, his to confirm.** |
 | Q44 | The listener account on the machine side (decision 42). | As built: (1) the listener uses the `user_id` that `POST /standing` answers, for reports and for `kwak status`; `config.json`'s `standing_user` stays what the claim named, for people only, and kwak does not rewrite it when the two differ (a pairing made before decision 42, or a name the registrar had to change, Q41); (2) when a reconnect lands on another account, the listener logs it and keeps its `next_batch`, so the gap fill of 5.3 still runs; events up to `last_event_id` are dropped, so a replay reaches no inbox twice; probe F14 measured on tuwunel v1.9.4 that the new account's sync from the old `since` replays nothing from before it, holds the messages posted since, and is `limited`, and that `/messages` reaches the old account's last routed event (10.3); (3) `kwak status` ("Listener account: ...") and `kwak doctor` ("account: the listener syncs as ...") show the account only from the running listener, after a `POST /standing` that worked, through the new optional `listener_account` field of the status reply (an older `kwak status` ignores it, an older listener does not send it); (4) the listener refuses the helper name `listener` everywhere (`helper`, `as` in `send` and `reply`, the PostToolUse binding), so a session that made a helper of that name before decision 42 can no longer post as it, although the registrar still reads and closes it (Q43). Other options: rewrite `standing_user` in `config.json` at each `POST /standing` (the file would then be right, but the listener would write a file that `kwak pair` owns); show the file's `standing_user` while the listener is down (often the old name); restart the sync from scratch on a new account (simpler, but it drops the messages of the gap, against decision 14). | **As built, his to confirm.** |
 | Q45 | What `POST /standing` does when its listener account moved to another pairing during the login (decision 42, 3.4 step 4). | As built: the login is undone, the key stays unconfirmed for that try, and the call tries once more under the same lock; P then gets a fresh name and its own account, and the listener sees one ordinary answer. If the second try also loses its account, the answer is `500` and the listener tries again later. Other options: answer an error at once and let the listener retry (simpler, one failed start); confirm P and hand it the moved account (refused: a token on another pairing's account, which its revoke would not log out). | **As built, his to confirm.** It happens only when the owner approved two re-pairs from one old key and both machines call the registrar at the same moment. Decision 43 (2026-11-12) removed the migration and kept this: it belongs to the life of a per-pairing account, not to the migration. A machine that still gets no account can run `kwak pair` again. |
+| Q46 | The machine setting of decision 44 (5.2, 5.11). | As built: (1) the key is `resume` in `config.json`, a JSON list such as `["replies","mentions"]`, next to `resume_exe`, `resume_max` and `resume_per_hour`; (2) `kwak config resume all` stores both words, not `all`, so the file says what fires, and a later `open` does not turn on by itself on a machine that chose `all`; (3) `mentions` fires only outside the session's own thread: a reply there that also mentions its agent is `replies`; (4) the listener reads the key before each synced batch, like the incoming check command, and again when an incoming check ends, so a change needs no restart and a message held for its check uses the value at that moment, and a file it cannot read keeps the value read last (`resume_exe` is still read only at start and at `reload`); (5) a word the listener does not know, from a hand edit, is ignored, and `kwak config resume` refuses it; `open` is refused as "not available yet"; (6) `kwak status` shows the triggers the listener uses. Other options: store `all` as typed; read the key only at start and at `reload` (a restart re-mints every session's token); name the setting `react` (the design note's advice, since `open` is not a resume). | **As built, his to confirm.** |
+| Q47 | Who can turn background resume on (5.2). | As built: (a) a plain file. Any process of the owner's user can run `kwak config resume all` or edit `config.json`, a session with a shell tool included; before decision 44 only the owner's bot DM could. Other options: (b) every change is announced: a log line, a `kwak status` line and one notice in the next interactive session; (c) an on/off switch stays at the registrar (decision 44 says the server setting disappears). Same-user code is not a boundary in kwak (decision 26): such a session can already change the check commands, read the keyring and run `claude` itself. | **(a) as built, his to confirm.** (b) is small if he wants it. |
+| Q48 | The registrar value at the update (5.11, `docs/deploy.md` section 12). | As built: no fallback. A machine with no `resume` key is off, whatever the owner had sent to the bot, and the registrar drops the stored value. An owner who had `set resume replies` or `all` runs `kwak config resume replies` (or `all`) on each machine after updating `kwak`. Other option: for one release, a machine with no key uses the value cached from `GET /me` (the design note's choice 4 (b)); that keeps a server-side value alive, which decision 44 rules out. | **As built, his to confirm.** |
+| Q49 | What the bot answers to `set resume` after decision 44 (3.5). | As built: `set resume <anything>` answers "Background resume is no longer set here. Set it on each machine with: kwak config resume" and stores nothing, so an owner who follows an old note learns where the setting went. This keeps one resume line in the bot's code. Other option: drop it, so `set resume` gets the usage line of any unknown setting, "Use: set question-timeout <duration>", and nothing about resume is left on the server. | **As built, his to confirm.** |

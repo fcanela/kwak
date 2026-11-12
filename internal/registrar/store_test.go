@@ -86,6 +86,34 @@ func TestStoreRefusesCorruptOrNewerFile(t *testing.T) {
 	}
 }
 
+// A state.json written before decision 44 holds the owner's background resume setting. It still
+// loads under the strict decoder, the value is dropped, and the next write leaves it out.
+func TestStoreDropsTheOldResumeSetting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	old := `{"version":1,"room_id":"!r","owners":{"fcanela":{"human":"@fcanela:kwak.test","alias":false,` +
+		`"added":"2026-11-03T10:00:00Z","added_by":"@admin:kwak.test","removed":null,` +
+		`"settings":{"resume":"all","question_timeout":"20m"}}},"dms":{},"pairings":{},"agents":{},"done_events":[]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("an older state.json with settings.resume: %v", err)
+	}
+	s.View(func(st *State) {
+		if got := st.Owners["fcanela"].Settings; got != (OwnerSettings{QuestionTimeout: "20m"}) {
+			t.Errorf("settings %+v", got)
+		}
+	})
+	if err := s.Update(func(st *State) error { st.RoomID = "!r2"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), `"resume"`) || !strings.Contains(string(data), `"20m"`) {
+		t.Fatalf("written: %s", data)
+	}
+}
+
 func TestStoreRollsBackAFailedUpdate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	s, _ := OpenStore(path)

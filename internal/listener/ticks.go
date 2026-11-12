@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -204,22 +205,22 @@ func resumeArgv(exe, sessionID string, strict bool) []string {
 	return append(argv, "--permission-mode", "dontAsk")
 }
 
-// resumeTriggerLocked starts the 30 s debounce when an item that the owner's setting covers lands
-// for an ended session with no tools connection. ownThread is a reply in a thread this session
-// rooted, whatever Route ranked it. Codex sessions are skipped (DV-14).
+// resumeTriggerLocked starts the 30 s debounce when an item that this machine's triggers cover
+// lands for an ended session with no tools connection (decision 44): replies is a reply in a thread
+// this session rooted (ownThread, whatever Route ranked it) or YourThread; mentions is a mention
+// anywhere else. The triggers are the ones read last from config.json (readLive): before each
+// routed batch, when an incoming check ends, and by kwak status. Codex sessions are skipped (DV-14).
 func (l *Listener) resumeTriggerLocked(s *session, r render.Reason, ownThread bool) {
-	if s.Ended == nil || s.Tools || s.Harness != wire.HarnessClaude || s.ResumeDue != nil || l.st.Settings == nil {
+	if s.Ended == nil || s.Tools || s.Harness != wire.HarnessClaude || s.ResumeDue != nil {
 		return
 	}
-	switch l.st.Settings.Resume {
-	case wire.ResumeReplies:
-		if !ownThread && r != render.YourThread {
-			return
-		}
-	case wire.ResumeAll:
-		if !ownThread && r != render.YourThread && r != render.Mention {
-			return
-		}
+	l.checkMu.Lock()
+	on := l.live.Resume
+	l.checkMu.Unlock()
+	reply := ownThread || r == render.YourThread
+	switch {
+	case reply && slices.Contains(on, wire.ResumeReplies):
+	case !reply && r == render.Mention && slices.Contains(on, wire.ResumeMentions):
 	default:
 		return
 	}

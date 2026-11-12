@@ -25,27 +25,44 @@ type pendingCheck struct {
 	Deliveries []Delivery  `json:"deliveries"`
 }
 
-// checkPaths reads the check commands from config.json at each use, so kwak config takes effect
-// without a restart. When the file cannot be read, the paths read last are used, so a broken file
-// never turns a check off.
-func (l *Listener) checkPaths() (outgoing, incoming string) {
+// liveConf is what the listener reads from config.json at each use, not only at start, so kwak
+// config takes effect without a restart (5.2): the check commands (5.16) and the background resume
+// triggers (5.11).
+type liveConf struct {
+	Outgoing, Incoming string
+	Resume             []string // wire.MachineConfig.ResumeTriggers: nil is off
+}
+
+func liveOf(c *MachineConfig) liveConf {
+	return liveConf{Outgoing: c.CheckOutgoing, Incoming: c.CheckIncoming, Resume: c.ResumeTriggers()}
+}
+
+// readLive reads config.json now. When the file cannot be read, the values read last are used,
+// so a broken file never turns a check off and never changes background resume.
+func (l *Listener) readLive() liveConf {
 	l.checkMu.Lock()
 	defer l.checkMu.Unlock()
 	c, err := ReadMachineConfig(l.cfg.ConfigPath)
 	if err != nil {
 		if !l.checkBad {
-			l.log.Error("config.json unreadable; the check commands read last stay on", "err", err)
+			l.log.Error("config.json unreadable; the check commands and background resume read last stay", "err", err)
 		}
 		l.checkBad = true
-		return l.checkLast[0], l.checkLast[1]
+		return l.live
 	}
 	l.checkBad = false
 	if c == nil {
-		l.checkLast = [2]string{}
+		l.live = liveConf{}
 	} else {
-		l.checkLast = [2]string{c.CheckOutgoing, c.CheckIncoming}
+		l.live = liveOf(c)
 	}
-	return l.checkLast[0], l.checkLast[1]
+	return l.live
+}
+
+// checkPaths reads the check commands from config.json at each use (readLive).
+func (l *Listener) checkPaths() (outgoing, incoming string) {
+	c := l.readLive()
+	return c.Outgoing, c.Incoming
 }
 
 // heldText is the notice a session gets for a message a check held. It never repeats the message.
@@ -170,6 +187,7 @@ func (l *Listener) runCheck(id string) {
 		ctx, cancel := context.WithTimeout(l.bg, checkInWait)
 		v = check.Command(ctx, l.d.Check, exe, p.Item.Body)
 		cancel()
+		l.readLive() // the resume triggers as they are now, not as they were when the check started
 	}
 	if l.bg.Err() != nil {
 		return

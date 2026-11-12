@@ -104,10 +104,11 @@ func printStatus(w io.Writer, st wire.StatusResponse) {
 		fmt.Fprintf(w, "Key valid until: %s\n", st.KeyExpiresAt.UTC().Format("2006-01-02"))
 	}
 	if st.Settings != (wire.Settings{}) {
-		fmt.Fprintf(w, "Owner settings: background resume %s, question timeout %s\n", st.Settings.Resume, st.Settings.QuestionTimeout)
+		fmt.Fprintf(w, "Owner settings: question timeout %s\n", st.Settings.QuestionTimeout)
 	}
 	if st.Resume != "" {
-		fmt.Fprintf(w, "Resume: %s; %d runs, %d running\n", st.Resume, st.ResumeRuns, st.ResumeActive)
+		fmt.Fprintf(w, "Background resume on this machine: %s (Claude Code sessions only); %d runs, %d running\n",
+			st.Resume, st.ResumeRuns, st.ResumeActive)
 	}
 	if st.ResumeHourLimit > 0 {
 		fmt.Fprintf(w, "Hourly limit: %d background runs started in the last hour; the next may start at %s\n",

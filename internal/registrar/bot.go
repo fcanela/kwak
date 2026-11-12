@@ -180,7 +180,6 @@ func helpText(r role) string {
 			"\nmachines: your paired machines (machine name and OS are what the machine said)" +
 			"\nagents: your open agents" +
 			"\nrevoke <pairing-id> | revoke all: revoke your pairings" +
-			"\nset resume off|replies|all: background resume on your machines" +
 			"\nset question-timeout <duration>: the no-reply notice time, 1m to 24h" +
 			"\nsettings: your settings")
 	}
@@ -233,7 +232,7 @@ func (s *Server) ownerAdd(ctx context.Context, by, human, alias string) (string,
 			return botErr(fmt.Sprintf("The owner name %s is taken by %s.", name, o.Human))
 		}
 		st.Owners[name] = &Owner{Human: human, Alias: alias != "", Added: now, AddedBy: by,
-			Settings: wire.Settings{Resume: wire.ResumeOff, QuestionTimeout: "15m"}}
+			Settings: OwnerSettings{QuestionTimeout: "15m"}}
 		return nil
 	})
 	if err != nil {
@@ -494,39 +493,33 @@ func (s *Server) cmdAgents(owner string) string {
 }
 
 func (s *Server) cmdSettings(owner string) string {
-	var set wire.Settings
+	var set OwnerSettings
 	s.Store.View(func(st *State) {
 		if o := st.Owners[owner]; o != nil {
 			set = o.Settings
 		}
 	})
-	return fmt.Sprintf("Background resume: %s. Question timeout: %s.", set.Resume, set.QuestionTimeout)
+	return fmt.Sprintf("Question timeout: %s.", set.QuestionTimeout)
 }
 
 func (s *Server) cmdSet(owner, what, value string) (string, error) {
 	var reply string
-	var apply func(*wire.Settings)
+	var apply func(*OwnerSettings)
 	switch strings.ToLower(what) {
 	case "resume":
-		v := strings.ToLower(value)
-		if v != wire.ResumeOff && v != wire.ResumeReplies && v != wire.ResumeAll {
-			return "", botErr("Use: set resume off|replies|all")
-		}
-		apply = func(st *wire.Settings) { st.Resume = v }
-		reply = fmt.Sprintf("Background resume is now %s. It takes effect on your machines within an hour.", v)
-		if v != wire.ResumeOff {
-			reply += " Codex sessions are skipped for now."
-		}
+		// Decision 44: background resume is set on each machine, not here. An owner who still
+		// sends this gets told where it went; nothing is stored.
+		return "", botErr("Background resume is no longer set here. Set it on each machine with: kwak config resume")
 	case "question-timeout":
 		d, err := time.ParseDuration(value)
 		if err != nil || d < time.Minute || d > 24*time.Hour {
 			return "", botErr("Use: set question-timeout <duration>, between 1m and 24h, for example 15m")
 		}
 		v := fmtDuration(d)
-		apply = func(st *wire.Settings) { st.QuestionTimeout = v }
+		apply = func(st *OwnerSettings) { st.QuestionTimeout = v }
 		reply = fmt.Sprintf("Question timeout is now %s. It takes effect on your machines within an hour.", v)
 	default:
-		return "", botErr("Use: set resume off|replies|all, or set question-timeout <duration>")
+		return "", botErr("Use: set question-timeout <duration>")
 	}
 	err := s.Store.Update(func(st *State) error {
 		o := st.Owners[owner]

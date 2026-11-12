@@ -111,14 +111,14 @@ func TestForgedCommandsAreIgnored(t *testing.T) {
 		{testAdmin, adminDM, "owner add " + mx("eve")},
 		{mx("fcanela"), dm, "pair " + pr.Code},
 		{mx("fcanela"), dm, "revoke all"},
-		{mx("fcanela"), dm, "set resume all"},
+		{mx("fcanela"), dm, "set question-timeout 2h"},
 	} {
 		if out := forge(c.sender, c.room, c.body); len(out) != 0 {
 			t.Errorf("%q answered %q", c.body, out)
 		}
 	}
 	st := f.state()
-	if st.Owners["eve"] != nil || st.Pairings[p.id].Revoked != nil || st.Owners["fcanela"].Settings.Resume != wire.ResumeOff {
+	if st.Owners["eve"] != nil || st.Pairings[p.id].Revoked != nil || st.Owners["fcanela"].Settings.QuestionTimeout != "15m" {
 		t.Fatal("a forged command changed state")
 	}
 	if c := f.callJSON("POST", wire.PathPairClaim, pr.Claim, struct{}{}, nil); c != 202 {
@@ -192,7 +192,7 @@ func TestOwnerAdd(t *testing.T) {
 		t.Errorf("owner add: %q", got)
 	}
 	o := f.state().Owners["fcanela"]
-	if o == nil || o.Human != mx("fcanela") || o.Alias || o.AddedBy != testAdmin || o.Settings.Resume != "off" || o.Settings.QuestionTimeout != "15m" {
+	if o == nil || o.Human != mx("fcanela") || o.Alias || o.AddedBy != testAdmin || o.Settings != (OwnerSettings{QuestionTimeout: "15m"}) {
 		t.Fatalf("owner %+v", o)
 	}
 	dm := f.dm(mx("fcanela"))
@@ -373,23 +373,28 @@ func TestSettingsCommands(t *testing.T) {
 	dm := f.addOwner("fcanela")
 	p := f.pair("fcanela", "", true)
 	say := func(b string) string { return f.say(mx("fcanela"), dm, b)[0] }
-	if got := say("set resume replies"); !strings.HasPrefix(got, "Background resume is now replies. It takes effect on your machines within an hour.") {
-		t.Errorf("%q", got)
-	}
 	if got := say("set question-timeout 90m"); !strings.Contains(got, "Question timeout is now 90m") {
 		t.Errorf("%q", got)
 	}
-	for _, bad := range []string{"set question-timeout 30s", "set question-timeout 25h", "set resume sometimes"} {
+	for _, bad := range []string{"set question-timeout 30s", "set question-timeout 25h", "set colour blue"} {
 		if got := say(bad); !strings.HasPrefix(got, "Use: ") {
 			t.Errorf("%s: %q", bad, got)
 		}
 	}
-	var me wire.Me
-	f.callJSON("GET", wire.PathMe, p.key, nil, &me)
-	if me.Settings != (wire.Settings{Resume: "replies", QuestionTimeout: "90m"}) {
-		t.Errorf("me %+v", me.Settings)
+	// Decision 44: background resume is set on each machine. The bot says so and stores nothing.
+	for _, v := range []string{"replies", "all", "off"} {
+		if got := say("set resume " + v); got != "Background resume is no longer set here. Set it on each machine with: kwak config resume" {
+			t.Errorf("set resume %s: %q", v, got)
+		}
 	}
-	if got := say("settings"); got != "Background resume: replies. Question timeout: 90m." {
+	if got := say("help"); strings.Contains(got, "resume") {
+		t.Errorf("help still names resume: %q", got)
+	}
+	_, data := f.callRaw("GET", wire.PathMe, p.key, nil, nil)
+	if !strings.Contains(string(data), `"settings":{"question_timeout":"90m"}`) {
+		t.Errorf("GET /me %s", data)
+	}
+	if got := say("settings"); got != "Question timeout: 90m." {
 		t.Errorf("%q", got)
 	}
 	if got := say("machines"); !strings.Contains(got, p.id+": laptop (linux)") {

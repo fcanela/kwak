@@ -231,8 +231,10 @@ Things that would touch a real setup, and how this guide avoids them:
 - `~/.codex` is the real Codex config: use a throwaway `CODEX_HOME`.
 - `~/.claude/settings.json` is the real Claude Code config: pass `--settings` with a temp file
   instead of editing it.
-- Settings in your DM with `@registrar` (for example `set resume ...`) are owner settings. They
-  apply to all your pairings, the real one too. Change them only if you mean that.
+- Settings in your DM with `@registrar` (for example `set question-timeout ...`) are owner
+  settings. They apply to all your pairings, the real one too. Change them only if you mean that.
+  Background resume is not one of them: `kwak config resume` sets it in the `config.json` of the
+  build you run, so a dev build's setting stays in its own folder.
 - The registrar and the Matrix server are shared. Changes there are deployed by the maintainer
   (`docs/deploy.md`). Ask the maintainer.
 

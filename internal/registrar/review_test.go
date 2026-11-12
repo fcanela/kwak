@@ -14,11 +14,11 @@ import (
 func TestReplayedOldCommandOutsideDoneEventsRefused(t *testing.T) {
 	f := newFixture(t)
 	dm := f.addOwner("fcanela")
-	old := f.event(mx("fcanela"), dm, "m.room.message", nil, map[string]string{"msgtype": "m.text", "body": "set resume all"})
+	old := f.event(mx("fcanela"), dm, "m.room.message", nil, map[string]string{"msgtype": "m.text", "body": "set question-timeout 2h"})
 	f.txn(old)
 	f.clock.Advance(time.Minute)
-	if out := f.say(mx("fcanela"), dm, "set resume off"); len(out) != 1 {
-		t.Fatalf("set resume off: %q", out)
+	if out := f.say(mx("fcanela"), dm, "set question-timeout 15m"); len(out) != 1 {
+		t.Fatalf("set question-timeout 15m: %q", out)
 	}
 	f.s.Store.Update(func(st *State) error {
 		st.DoneEvents = nil
@@ -29,8 +29,8 @@ func TestReplayedOldCommandOutsideDoneEventsRefused(t *testing.T) {
 	if out := f.hs.noticesIn(dm)[before:]; len(out) != 0 {
 		t.Fatalf("a replayed command got a reply: %q", out)
 	}
-	if got := f.state().Owners["fcanela"].Settings.Resume; got != wire.ResumeOff {
-		t.Fatalf("a replayed command ran: resume %s", got)
+	if got := f.state().Owners["fcanela"].Settings.QuestionTimeout; got != "15m" {
+		t.Fatalf("a replayed command ran: question timeout %s", got)
 	}
 }
 
@@ -40,18 +40,18 @@ func TestCommandReReadFailureReplies(t *testing.T) {
 	f.hs.mu.Lock()
 	f.hs.fail["FetchEvent"] = errors.New("deadline exceeded")
 	f.hs.mu.Unlock()
-	out := f.say(mx("fcanela"), dm, "set resume all")
+	out := f.say(mx("fcanela"), dm, "set question-timeout 2h")
 	if len(out) != 1 || !strings.HasPrefix(out[0], "That failed: ") || !strings.HasSuffix(out[0], "Try again.") {
 		t.Fatalf("re-read failure: %q", out)
 	}
-	if f.state().Owners["fcanela"].Settings.Resume == wire.ResumeAll {
+	if f.state().Owners["fcanela"].Settings.QuestionTimeout == "2h" {
 		t.Fatal("the command ran without the re-check")
 	}
 	f.hs.mu.Lock()
 	delete(f.hs.fail, "FetchEvent")
 	f.hs.fail["RoomInfo"] = errors.New("deadline exceeded")
 	f.hs.mu.Unlock()
-	if out := f.say(mx("fcanela"), dm, "set resume all"); len(out) != 1 || !strings.HasPrefix(out[0], "That failed: ") {
+	if out := f.say(mx("fcanela"), dm, "set question-timeout 2h"); len(out) != 1 || !strings.HasPrefix(out[0], "That failed: ") {
 		t.Fatalf("room info failure: %q", out)
 	}
 }

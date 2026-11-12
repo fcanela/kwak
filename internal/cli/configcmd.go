@@ -14,11 +14,11 @@ import (
 	"github.com/fcanela/kwak/internal/wire"
 )
 
-const configUsage = "usage: kwak config resume | resume-exe [--harness claude|codex] [path] | " +
+const configUsage = "usage: kwak config resume [off|<triggers>] | resume-exe [--harness claude|codex] [path] | " +
 	"resume-per-hour <n> | check-outgoing <path|off> | check-incoming <path|off>"
 
-// Config is kwak config resume | resume-exe [--harness claude|codex] [path] | resume-per-hour <n> |
-// check-outgoing <path|off> | check-incoming <path|off>.
+// Config is kwak config resume [off|<triggers>] | resume-exe [--harness claude|codex] [path] |
+// resume-per-hour <n> | check-outgoing <path|off> | check-incoming <path|off>.
 func (c *CLI) Config(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, configUsage)
@@ -26,11 +26,7 @@ func (c *CLI) Config(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	}
 	switch args[0] {
 	case "resume":
-		if len(args) != 1 {
-			fmt.Fprintln(stderr, "usage: kwak config resume")
-			return 2
-		}
-		return c.configResume(stdout)
+		return c.configResume(args[1:], stdout, stderr)
 	case "resume-exe":
 		return c.configResumeExe(args[1:], stdout, stderr)
 	case "resume-per-hour":
@@ -42,21 +38,96 @@ func (c *CLI) Config(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	return 2
 }
 
-func (c *CLI) configResume(stdout io.Writer) int {
-	bot := "@registrar"
-	if dir, err := c.env.ConfigDir(); err == nil {
-		if cfg, err := loadConfig(dir, c.env.InsecureHTTPForTests); err == nil {
-			bot += ":" + cfg.ServerName
+const resumeUsage = "usage: kwak config resume [off | replies,mentions | all]"
+
+const resumeHelp = "replies: resume an ended session when someone replies in a thread it started (recommended).\n" +
+	"mentions: resume it when someone mentions its agent outside that thread.\n" +
+	"all: replies and mentions. off: never (the default).\n"
+
+// errResumeOpen is the answer to the open trigger of decision 31 (an open question), which needs
+// the responder (spec 5.11).
+var errResumeOpen = errors.New("open (a run for an open question) is not available yet: it needs the responder, " +
+	"which is not built. Use replies, mentions or all")
+
+// parseResume reads the triggers of kwak config resume: off, or a comma list of replies, mentions
+// and all. all is stored as replies and mentions, so the file says what fires. nil is off.
+func parseResume(arg string) ([]string, error) {
+	if strings.ToLower(strings.TrimSpace(arg)) == "off" {
+		return nil, nil
+	}
+	var replies, mentions bool
+	for _, w := range strings.Split(arg, ",") {
+		switch strings.ToLower(strings.TrimSpace(w)) {
+		case wire.ResumeReplies:
+			replies = true
+		case wire.ResumeMentions:
+			mentions = true
+		case "all":
+			replies, mentions = true, true
+		case "open":
+			return nil, errResumeOpen
+		case "off":
+			return nil, errors.New("off cannot be combined with other triggers")
+		default:
+			return nil, fmt.Errorf("%q is not a trigger. Use off, or replies, mentions or all", w)
 		}
 	}
-	fmt.Fprintf(stdout, "Background resume is an owner setting. Only you can change it, in your chat with %s. Send one of:\n\n"+
-		"    set resume off\n    set resume replies\n    set resume all\n\n"+
-		"off: never resume a session in the background (the default).\n"+
-		"replies: resume an ended session when someone replies in a thread it started (recommended).\n"+
-		"all: also resume it when someone mentions it.\n\n"+
-		"It takes effect on your machines within an hour. Only Claude Code sessions are resumed for now.\n"+
-		"A resumed run needs the path of claude: run kwak config resume-exe in your own terminal.\n", bot)
+	var on []string
+	if replies {
+		on = append(on, wire.ResumeReplies)
+	}
+	if mentions {
+		on = append(on, wire.ResumeMentions)
+	}
+	return on, nil
+}
+
+// configResume shows or sets this machine's background resume triggers (decision 44, spec 5.11).
+func (c *CLI) configResume(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 1 {
+		fmt.Fprintln(stderr, resumeUsage)
+		return 2
+	}
+	var on []string
+	if len(args) == 1 {
+		var err error
+		if on, err = parseResume(args[0]); err != nil {
+			fmt.Fprintf(stderr, "kwak config resume: %v.\n%s\n", err, resumeUsage)
+			return 2
+		}
+	}
+	dir, err := c.env.ConfigDir()
+	if err != nil {
+		return fail(stderr, "%v", err)
+	}
+	cfg, err := loadConfig(dir, c.env.InsecureHTTPForTests)
+	if err != nil {
+		return fail(stderr, "%v", err)
+	}
+	if len(args) == 0 {
+		fmt.Fprintf(stdout, "Background resume on this machine: %s.\n\n%s\n%s\n", resumeText(cfg.ResumeTriggers()), resumeHelp, resumeUsage)
+		return 0
+	}
+	cfg.Resume = on
+	if err := cfg.Save(dir); err != nil {
+		return fail(stderr, "could not write %s: %v", ConfigFile, err)
+	}
+	fmt.Fprintf(stdout, "Background resume on this machine is now %s. The listener reads it before each batch of messages, "+
+		"so no restart is needed.\n", resumeText(on))
+	if len(on) > 0 {
+		fmt.Fprintln(stdout, "Only Claude Code sessions are resumed for now.")
+		if cfg.ResumeExe[wire.HarnessClaude] == "" {
+			fmt.Fprintln(stdout, "A resumed run needs the path of claude: run kwak config resume-exe in your own terminal.")
+		}
+	}
 	return 0
+}
+
+func resumeText(on []string) string {
+	if len(on) == 0 {
+		return "off"
+	}
+	return strings.Join(on, ", ")
 }
 
 func (c *CLI) configResumeExe(args []string, stdout, stderr io.Writer) int {

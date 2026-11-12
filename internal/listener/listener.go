@@ -128,7 +128,6 @@ const (
 	textNotSeen      = "kwak has not seen this session start yet; try again in a moment"
 	textOlder        = wire.TextListenerOlder
 	textNoPoll       = "Replies in this thread and messages that mention you are shown to you automatically. There is nothing to poll."
-	textResumeClaude = "background resume: Claude only"
 )
 
 // Timings of spec 5.1 and 5.8 to 5.11.
@@ -189,7 +188,7 @@ type Listener struct {
 	checkIn   string                         // the incoming check command, read before each routed batch (5.16)
 	checks    chan struct{}                  // bounds incoming check commands running at once
 	checkMu   sync.Mutex
-	checkLast [2]string       // the check commands (outgoing, incoming) read last from config.json (5.16)
+	live      liveConf        // what was read last from config.json at use (5.2)
 	checkBad  bool            // config.json was unreadable at the last read; logged once
 	opening   map[string]bool // sessions whose owner's SessionStart is stopping their run (5.11)
 	hourRuns  []time.Time     // background runs started in the last hour, oldest first; memory only (5.11)
@@ -264,7 +263,7 @@ func New(cfg Config, stateDir string, d Deps) (*Listener, error) {
 	}
 	l.conf.Store(conf)
 	if conf != nil {
-		l.checkLast = [2]string{conf.CheckOutgoing, conf.CheckIncoming}
+		l.live = liveOf(conf)
 	}
 	if conf == nil {
 		l.phase, l.detail = wire.StateUnpaired, textNotPaired

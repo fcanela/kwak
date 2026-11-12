@@ -217,6 +217,7 @@ func arrange(t *testing.T, e *env, c wiretest.IPCCase) wire.Harness {
 		}
 		e.l.mu.Unlock()
 		e.setChecks("", "/opt/kwak/check-in")
+		e.setResume(wire.ResumeReplies, wire.ResumeMentions)
 	case "status, waiting for the keyring":
 		e.l.st.Settings = nil
 		e.setPhase(wire.StateWaitingKeyring, textKeyring)

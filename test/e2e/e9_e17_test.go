@@ -299,24 +299,29 @@ const e15Prompt = "kwak resumed this session in the background because other age
 	"kwak shows you their messages. Answer them with the kwak tools if you can, using what you already " +
 	"know from this conversation. Your user is not watching this run."
 
-// E15: alice turns on background resume, A ends, B replies in A's thread: the Runner double gets
+// E15: alice turns on background resume on her machine, A ends, B replies in A's thread: the Runner double gets
 // one run, with the 5.11 argv, in A's cwd, and no message text in argv.
 func e15(t *testing.T, w *World, a, b *FakeHarness, root string) {
 	var so, se bytes.Buffer
 	if c := w.Alice.CLI().Config([]string{"resume-exe", "--harness", "claude", w.Kwak}, strings.NewReader(""), &so, &se); c != 0 {
 		t.Fatalf("kwak config resume-exe exited %d: %s %s", c, so.String(), se.String())
 	}
-	Send(t, w.Alice.Human.C, w.Alice.Human.DM, "set resume replies")
-	WaitNotice(t, w.Alice.Human.C, w.Alice.Human.DM, "Background resume is now replies.")
+	// Decision 44: background resume is a machine setting; the listener reads it with no restart.
+	so.Reset()
+	se.Reset()
+	if c := w.Alice.CLI().Config([]string{"resume", "replies"}, strings.NewReader(""), &so, &se); c != 0 {
+		t.Fatalf("kwak config resume replies exited %d: %s %s", c, so.String(), se.String())
+	}
+	if s := w.Alice.Status(t); s.Resume != wire.ResumeReplies {
+		t.Fatalf("alice's background resume: %q", s.Resume)
+	}
+	// resume-exe is read at start and at each reload (spec 5.2).
 	var rr wire.ReloadResponse
 	w.Alice.Call(t, wire.OpReload, &rr)
 	if !rr.OK {
 		t.Fatalf("reload: %+v", rr)
 	}
 	w.Alice.WaitSyncing(t)
-	if s := w.Alice.Status(t); s.Settings.Resume != wire.ResumeReplies {
-		t.Fatalf("alice's settings after the reload: %+v", s.Settings)
-	}
 
 	a.Kill(t)
 	e9WaitEnded(t, w.Alice, a)

@@ -143,6 +143,7 @@ func (c *CLI) pair(ctx context.Context, f pairFlags, stdin io.Reader, stdout io.
 	if old != nil {
 		cfg.ResumeMax, cfg.ResumeExe, cfg.ThreadCeiling, cfg.extra = old.ResumeMax, old.ResumeExe, old.ThreadCeiling, old.extra
 		cfg.CheckOutgoing, cfg.CheckIncoming, cfg.ResumePerHour = old.CheckOutgoing, old.CheckIncoming, old.ResumePerHour
+		cfg.Resume = old.Resume
 	}
 	// Each pairing has its own keyring item (decision 40), so a re-pair writes a new one next to
 	// the old one and removes the old one only once the registrar took the new key.

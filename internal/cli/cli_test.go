@@ -287,7 +287,7 @@ func (r *rig) paired() {
 	r.t.Helper()
 	data := `{"version":1,"server":"` + r.srv.URL + `","server_name":"kwak.test","owner":"fcanela","machine":"laptop",` +
 		`"pairing_id":"` + wiretest.OldPairingID + `","room_id":"!a1B2c3D4","standing_user":"` + wiretest.StandingUser + `",` +
-		`"resume_max":3,"resume_exe":{"claude":"/opt/claude"},"thread_ceiling":7,"resume_per_hour":40,"check_outgoing":"/opt/out.sh","check_incoming":"/opt/in.sh",` +
+		`"resume_max":3,"resume_exe":{"claude":"/opt/claude"},"resume":["replies"],"thread_ceiling":7,"resume_per_hour":40,"check_outgoing":"/opt/out.sh","check_incoming":"/opt/in.sh",` +
 		`"future_field":{"x":1}}`
 	if err := os.MkdirAll(r.cfgDir, 0o700); err != nil {
 		r.t.Fatal(err)
@@ -594,6 +594,9 @@ func TestRepair(t *testing.T) {
 	}
 	if exe, _ := cfg["resume_exe"].(map[string]any); exe["claude"] != "/opt/claude" {
 		t.Errorf("resume_exe lost: %v", cfg["resume_exe"])
+	}
+	if on, _ := cfg["resume"].([]any); len(on) != 1 || on[0] != "replies" {
+		t.Errorf("resume lost: %v", cfg["resume"])
 	}
 }
 

@@ -186,16 +186,10 @@ type AliveResponse struct {
 	Closed  []string `json:"closed"`
 }
 
-// Resume settings.
-const (
-	ResumeOff     = "off"
-	ResumeReplies = "replies"
-	ResumeAll     = "all"
-)
-
-// Settings are an owner's settings, changed only through the bot DM.
+// Settings are an owner's settings, changed only through the bot DM. Background resume is not one
+// of them since decision 44: it is set on each machine (MachineConfig.Resume, spec 5.11), and
+// GET /me no longer sends "resume".
 type Settings struct {
-	Resume          string `json:"resume"`
 	QuestionTimeout string `json:"question_timeout"` // Go duration string, for example "15m"
 }
 
@@ -363,7 +357,7 @@ type StatusResponse struct {
 	SyncError       string         `json:"sync_error,omitempty"`
 	StateReset      bool           `json:"state_reset,omitempty"`
 	CallerChecks    string         `json:"caller_checks"`    // "peer" or "claimed"
-	Resume          string         `json:"resume,omitempty"` // for example "background resume: Claude only"
+	Resume          string         `json:"resume,omitempty"` // this machine's background resume triggers: "off" or for example "replies, mentions"
 	ResumeRuns      int            `json:"resume_runs"`
 	ResumeActive    int            `json:"resume_active"`
 	Paused          []PausedThread `json:"paused,omitempty"` // threads at the loop ceiling

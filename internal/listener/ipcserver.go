@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/fcanela/kwak/internal/ipc"
@@ -208,7 +209,7 @@ func (l *Listener) mcpClosed(c *client) {
 }
 
 func (l *Listener) status(c *client) wire.StatusResponse {
-	out, in := l.checkPaths()
+	live := l.readLive()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	r := wire.StatusResponse{
@@ -229,15 +230,19 @@ func (l *Listener) status(c *client) wire.StatusResponse {
 	if limit := l.resumePerHour(); len(l.hourRunsLocked(l.d.Clock.Now())) >= limit {
 		r.ResumeHourLimit, r.ResumeNextAt = limit, l.nextHourRunLocked(limit)
 	}
-	r.CheckOutgoing, r.CheckIncoming = out, in
+	r.CheckOutgoing, r.CheckIncoming = live.Outgoing, live.Incoming
 	r.CheckWaiting = len(l.st.Checking)
 	r.Rejected = append([]wire.Rejection(nil), l.st.Rejected...)
 	if conf := l.conf.Load(); l.phase != wire.StateUnpaired && conf != nil {
 		r.Server, r.Owner, r.Machine, r.PairingID, r.Test = conf.Server, conf.Owner, conf.Machine, conf.PairingID, conf.Test
 		r.ListenerAccount = l.standUser
 		r.SyncError = l.syncErr
+		r.Resume = "off"
+		if len(live.Resume) > 0 {
+			r.Resume = strings.Join(live.Resume, ", ")
+		}
 		if l.st.Settings != nil {
-			r.Settings, r.KeyExpiresAt, r.Resume = *l.st.Settings, l.st.KeyExpires, textResumeClaude
+			r.Settings, r.KeyExpiresAt = *l.st.Settings, l.st.KeyExpires
 		}
 		if l.phase == wire.StateSyncing {
 			r.LastSync = l.lastSync

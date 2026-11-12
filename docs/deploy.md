@@ -778,3 +778,58 @@ After going forward, a machine still on a per-owner account shows it: `kwak stat
 `as <word pair>` for its pairing although its listener runs. Run `kwak pair` on that machine.
 
 The records the rollback closed stay closed, and their names are never given out again.
+
+### Background resume moves to the machines (decision 44)
+
+This applies when a registrar from before decision 44 gets the image with no background resume
+setting. Since decision 44 background resume is set on each machine with `kwak config resume`
+(spec 5.11), and the bot's `set resume` is gone. If the server still runs an older image than the
+ones above, do those steps first.
+
+What changes in the strictly read files:
+
+- **`config.json`**: nothing.
+- **`state.json`**: no new key. A file written before has `"resume"` in each owner's `settings`.
+  The new image still accepts that key, ignores its value, and leaves it out at its next write. So
+  an older image reads the file the new image wrote, and the new image reads an older file.
+
+**Deploy.** The order does not matter: a new `kwak` ignores the `resume` that an older registrar
+still sends in `GET /me`, and an older `kwak` reads a missing `resume` as off. This order keeps
+the gap short for an owner who uses background resume:
+
+1. In the bot DM send `settings` and write down the background resume value (`off`, `replies` or
+   `all`). The new image no longer shows it.
+2. Update `kwak` on each machine, and on each machine where background resume should run, set it:
+   `kwak config resume replies` (or `all`). A new `kwak` no longer follows the bot's value, so a
+   machine where this is not run stays off. `kwak status` shows the line "Background resume on this
+   machine: ...".
+3. Build the new image (step 3), pin the commit you built, put it in `compose.yaml` and
+   `docker compose -f /srv/kwak-registrar/compose.yaml up -d`. No `config.json` change, no tuwunel
+   change, no new registration, no nginx or firewall change.
+4. Check:
+   - `ps` shows the registrar running, not restarting.
+   - In the bot DM, `help` has no `set resume` line, `settings` answers "Question timeout: 15m."
+     (or your value), and `set resume replies` answers "Background resume is no longer set here.
+     Set it on each machine with: kwak config resume".
+
+**An older `kwak` against the new image** (read in the code of commit 7a01730 and of this
+branch before decision 44). It decodes `GET /me` leniently, so the missing `resume` is an empty
+value, not an error. Its trigger acts only on `replies` and `all`, so an empty value starts no
+run: it never turns background resume on, and it does not crash. It keeps the value it cached
+before until its next `GET /me`, at its start or within the hour, so a machine whose owner had
+`set resume replies` may still start runs for up to an hour after the registrar update. Two
+things look odd until that machine updates `kwak`: its `kwak status` prints "Owner settings:
+background resume , question timeout 15m" (an empty value), and its `kwak config resume` still
+says to send `set resume` to the bot, which now answers with the line above.
+
+**Roll back.**
+
+- **Registrar:** put the old image back in `compose.yaml` and `up -d`. No `jq` step: the older
+  image reads a `settings` with no `resume` as an empty value. Its `GET /me` then sends
+  `"resume":""`, which an older `kwak` reads as off and a new `kwak` ignores. The value the owner
+  had sent before is lost; send `set resume replies` (or `all`) again in the bot DM if machines with
+  an older `kwak` should run background resume.
+- **Machines:** an older `kwak` ignores the `resume` key in `config.json` and keeps it when it
+  saves the file, so going back and forward again needs no `kwak config resume`. It follows the
+  registrar's value again: off with the new image, the value set with `set resume` with an older
+  one.

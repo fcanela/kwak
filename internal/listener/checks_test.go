@@ -28,9 +28,7 @@ var fakeToken = "gh" + "p_" + strings.Repeat("aB3d", 9)
 
 // setChecks writes the check commands to config.json; the listener reads them at each use.
 func (e *env) setChecks(out, in string) {
-	c := machineConf()
-	c.CheckOutgoing, c.CheckIncoming = out, in
-	writeConf(e.t, e.confPath, c)
+	e.editConf(func(c *MachineConfig) { c.CheckOutgoing, c.CheckIncoming = out, in })
 }
 
 func (e *env) notSent(t *testing.T, r wire.ToolResponse) {
@@ -151,7 +149,7 @@ func TestOutgoingCheckCommand(t *testing.T) {
 // sender, the thread and the reason but not the secret, ⛔ from the agent, never the check
 // command, and no background run.
 func TestIncomingSecretHeld(t *testing.T) {
-	e := resumeEnv(t, wire.ResumeAll)
+	e := resumeEnv(t, wire.ResumeReplies, wire.ResumeMentions)
 	e.setChecks("", checkIn)
 	uid := e.endedClaude(100, sid1, t.TempDir(), "$root")
 	e.deliver(event("$leak", bob, e.clk.Now(), inThread(text("here: "+fakeToken, uid), "$root")))

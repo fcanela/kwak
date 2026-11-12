@@ -310,7 +310,7 @@ func TestParentClosedEnsuresParentThenRetries(t *testing.T) {
 
 func TestDeadlinesFireAtStartup(t *testing.T) {
 	e := newEnv(t)
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.connect()
 	dir := t.TempDir()
 	uid := e.claudeSession(100, sid1, dir)

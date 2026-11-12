@@ -332,7 +332,7 @@ func TestReportFailureNeverBlocks(t *testing.T) {
 // account (5.11, Q29).
 func TestReportHourlyRunLimit(t *testing.T) {
 	e := newEnv(t, perHourOpt(1))
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.reg.reportRoom = reportRoom
 	e.connect()
 	for i, sid := range []string{sid1, sid2, sid3} {

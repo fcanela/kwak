@@ -62,7 +62,7 @@ func loadConfigFile(path string, allowHTTP bool) (*Config, error) {
 }
 
 var configKeys = []string{"version", "server", "server_name", "owner", "machine", "pairing_id",
-	"room_id", "standing_user", "resume_max", "resume_exe", "thread_ceiling", "resume_per_hour",
+	"room_id", "standing_user", "resume_max", "resume_exe", "resume", "thread_ceiling", "resume_per_hour",
 	"check_outgoing", "check_incoming", "keyring_user", "test"}
 
 // Save writes dir/config.json with mode 0600 through a temp file and a rename.

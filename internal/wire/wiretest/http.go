@@ -368,7 +368,7 @@ var HTTP = []Exchange{
 		Auth:   bearer(OwnerKey),
 		Status: 200,
 		Response: `{"owner":"fcanela","pairing_id":"3f9a1c2e","machine":"laptop","key_expires_at":"2027-01-31T10:05:00Z",` +
-			`"agents_open":12,"settings":{"resume":"off","question_timeout":"15m"}}`,
+			`"agents_open":12,"settings":{"question_timeout":"15m"}}`,
 	},
 	{
 		Name: "me: bad key", Method: "GET", Path: wire.APIPrefix + wire.PathMe,

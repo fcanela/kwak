@@ -327,9 +327,9 @@ func (l *Listener) routeEvents(ctx context.Context, m Matrix, evs []matrix.Event
 	if len(evs) == 0 {
 		return
 	}
-	_, in := l.checkPaths()
+	live := l.readLive()
 	l.mu.Lock()
-	l.checkIn = in
+	l.checkIn = live.Incoming
 	l.mu.Unlock()
 	for _, ev := range evs {
 		l.mu.Lock()

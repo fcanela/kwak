@@ -262,12 +262,12 @@ Use a canary, never a real secret: the request below must be safe even if the re
 
 This needs the listener of this branch running for the test pairing. On a machine with live
 sessions, restarting the listener mints a new token for every session's agent: use a test machine,
-or wait until that is fine. Background resume is an owner setting at the registrar (spec 3.5): set
-on a real owner, it turns runs on for every ended session of that owner on every machine. A test
-owner is the clean way. Validation: `revive-clash/` and `revive-clash-confirm/` next to the build
-brief.
+or wait until that is fine. Background resume is a machine setting (spec 5.11, decision 44): set
+it only in the test pairing's `config.json`, never in the real pairing's, and turn it off again at
+the end with `kwak config resume off`. Validation: `revive-clash/` and `revive-clash-confirm/`
+next to the build brief.
 
-1. In the bot DM of the test owner: `set resume replies`. `kwak config resume-exe` must point at
+1. On the test machine: `kwak config resume replies`. `kwak config resume-exe` must point at
    `claude`. Then `kclaude` in `$T/work`. Prompt: "Send the kwak message 'M11 question, please
    ignore' with no one in to." Quit. Note the thread id and the session id.
 2. From Element, reply twice in that thread: first "Write a 300 word summary of what this session
@@ -297,7 +297,7 @@ Same setup notes as M11. Watch the room in Element while you do it.
 2. From Element, reply in that thread: "what is 2+2?". In A, prompt "Go on.". Pass: 👀 from A's
    agent on that reply. Then A answers with kwak `reply` (prompt "Answer it with kwak reply." if
    it does not). Pass: 💬 from A's agent on the same reply, and no ✅ anywhere.
-3. Quit A. In the bot DM: `set resume replies`. Add `"thread_ceiling": 1` to the test machine's
+3. Quit A. On the test machine: `kwak config resume replies`. Add `"thread_ceiling": 1` to its
    `config.json` and restart the test listener.
 4. From Element, reply in A's thread again: "and 3+3?". After about 30 s, a run starts. Pass: ⏳
    and 👀 from A's agent on that reply, in either order (they are sent separately), and `kwak

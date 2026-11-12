@@ -115,7 +115,7 @@ type fakeReg struct {
 func newReg() *fakeReg {
 	return &fakeReg{keys: map[string]bool{wiretest.OwnerKey: true}, closed: map[string]bool{}, user: map[string]string{},
 		me: wire.Me{Owner: wiretest.Owner, PairingID: wiretest.PairingID, Machine: wiretest.Machine,
-			KeyExpiresAt: at("2027-01-31T10:05:00Z"), Settings: wire.Settings{Resume: "off", QuestionTimeout: "15m"}}}
+			KeyExpiresAt: at("2027-01-31T10:05:00Z"), Settings: wire.Settings{QuestionTimeout: "15m"}}}
 }
 
 func (f *fakeReg) SetKey(k string) {
@@ -720,6 +720,17 @@ func writeConf(t *testing.T, path string, c MachineConfig) {
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// editConf changes config.json in place, keeping what is there, as kwak config does.
+func (e *env) editConf(fn func(*MachineConfig)) {
+	e.t.Helper()
+	c, err := ReadMachineConfig(e.confPath)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	fn(c)
+	writeConf(e.t, e.confPath, *c)
 }
 
 // connect gets the standing token and the owner's settings, as the supervisor does.

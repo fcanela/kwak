@@ -410,8 +410,8 @@ var IPC = []IPCCase{
 		Request: `{"v":1,"op":"status"}`,
 		Reply: `{"v":1,"ok":true,"kwak":"0.1.0","state":"syncing","server":"https://kwak.test","owner":"fcanela","machine":"laptop",` +
 			`"pairing_id":"3f9a1c2e","listener_account":"` + StandingUser + `","key_expires_at":"2027-01-31T10:05:00Z",` +
-			`"settings":{"resume":"off","question_timeout":"15m"},` +
-			`"last_sync":"2026-11-02T10:41:00Z","caller_checks":"peer","resume":"background resume: Claude only","resume_runs":1,` +
+			`"settings":{"question_timeout":"15m"},` +
+			`"last_sync":"2026-11-02T10:41:00Z","caller_checks":"peer","resume":"replies, mentions","resume_runs":1,` +
 			`"resume_active":0,"paused":[{"thread":"$Qx1abc","turns":50}],"resume_hour_limit":300,` +
 			`"resume_next_at":"2026-11-02T11:20:00Z","check_incoming":"/opt/kwak/check-in","check_waiting":1,` +
 			`"rejected":[{"at":"2026-11-02T10:30:00Z","way":"outgoing","session":"claude:` + ClaudeSession + `","agent":"` + ClaudeAgent + `",` +
@@ -436,14 +436,14 @@ var IPC = []IPCCase{
 		Request: `{"v":1,"op":"status"}`,
 		Reply: `{"v":1,"ok":true,"kwak":"0.1.0","state":"waiting_keyring","detail":"waiting for the keyring (locked?)",` +
 			`"server":"https://kwak.test","owner":"fcanela","machine":"laptop","pairing_id":"3f9a1c2e","caller_checks":"claimed",` +
-			`"resume_runs":0,"resume_active":0,"sessions":[]}`,
+			`"resume":"off","resume_runs":0,"resume_active":0,"sessions":[]}`,
 	},
 	{
 		Name:    "status, connecting after a state reset",
 		Request: `{"v":1,"op":"status"}`,
 		Reply: `{"v":1,"ok":true,"kwak":"0.1.0","state":"connecting","server":"https://kwak.test","owner":"fcanela",` +
 			`"machine":"laptop","pairing_id":"3f9a1c2e","sync_error":"registrar unreachable, HTTP 502","state_reset":true,` +
-			`"caller_checks":"peer","resume_runs":0,"resume_active":0,"sessions":[]}`,
+			`"caller_checks":"peer","resume":"off","resume_runs":0,"resume_active":0,"sessions":[]}`,
 	},
 	{
 		Name:    "inbox",

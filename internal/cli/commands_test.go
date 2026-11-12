@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,8 +37,8 @@ func TestStatus(t *testing.T) {
 		"Pairing: fcanela on laptop, pairing 3f9a1c2e, server https://kwak.test",
 		"Listener account: " + wiretest.StandingUser, // decision 42
 		"Key valid until: 2027-01-31",
-		"Owner settings: background resume off, question timeout 15m",
-		"Resume: background resume: Claude only; 1 runs, 0 running",
+		"Owner settings: question timeout 15m\n",
+		"Background resume on this machine: replies, mentions (Claude Code sessions only); 1 runs, 0 running",
 		"Loop ceiling: no more background runs for thread $Qx1abc after 50; a message from a person in it starts the count again",
 		"Hourly limit: 300 background runs started in the last hour; the next may start at 2026-11-02 11:20 UTC",
 		"Checks: secrets scan on; outgoing command off; incoming command /opt/kwak/check-in; 1 waiting for the incoming check",
@@ -121,15 +122,55 @@ func TestInbox(t *testing.T) {
 	}
 }
 
+// kwak config resume shows and sets this machine's background resume triggers (decision 44): a
+// comma list stored as written in full (all is replies and mentions), off removes the key, and
+// open is refused until the responder exists. Nothing goes to the registrar or the listener.
 func TestConfigResume(t *testing.T) {
 	r := newRig(t)
+	if code, _, errs := r.run(r.cli.Config, "", "resume", "replies"); code != 1 || !strings.Contains(errs, "not paired") {
+		t.Errorf("unpaired: exit %d: %s", code, errs)
+	}
 	r.paired()
 	code, out, _ := r.run(r.cli.Config, "", "resume")
-	if code != 0 || !strings.Contains(out, "in your chat with @registrar:kwak.test") || !strings.Contains(out, "    set resume replies\n") {
-		t.Errorf("exit %d:\n%s", code, out)
+	if code != 0 || !strings.Contains(out, "Background resume on this machine: replies.\n") || !strings.Contains(out, "mentions: ") {
+		t.Errorf("show: exit %d:\n%s", code, out)
 	}
-	if len(r.reg.log()) != 0 || len(r.ln.ops) != 0 || r.config()["resume_exe"] == nil {
-		t.Error("config resume changed something")
+	resume := func() string {
+		on, ok := r.config()["resume"].([]any)
+		if !ok {
+			return "<none>"
+		}
+		return fmt.Sprint(on...)
+	}
+	for _, c := range []struct{ arg, want string }{
+		{"mentions,replies", "repliesmentions"},
+		{"mentions", "mentions"},
+		{"all", "repliesmentions"},
+		{" Replies , replies", "replies"},
+		{"off", "<none>"},
+	} {
+		code, out, errs := r.run(r.cli.Config, "", "resume", c.arg)
+		if code != 0 || !strings.Contains(out, "Background resume on this machine is now ") || !strings.Contains(out, "no restart is needed") {
+			t.Errorf("%q: exit %d: %s %s", c.arg, code, out, errs)
+		}
+		if got := resume(); got != c.want {
+			t.Errorf("%q: resume %s, want %s", c.arg, got, c.want)
+		}
+	}
+	for _, bad := range []string{"open", "replies,open", "off,replies", "sometimes", "replies,"} {
+		code, _, errs := r.run(r.cli.Config, "", "resume", bad)
+		if code != 2 || resume() != "<none>" {
+			t.Errorf("%q: exit %d, resume %s", bad, code, resume())
+		}
+		if strings.Contains(bad, "open") && !strings.Contains(errs, "not available yet: it needs the responder") {
+			t.Errorf("%q: %s", bad, errs)
+		}
+	}
+	if code, _, _ := r.run(r.cli.Config, "", "resume", "replies", "mentions"); code != 2 {
+		t.Errorf("two arguments: exit %d", code)
+	}
+	if len(r.reg.log()) != 0 || len(r.ln.ops) != 0 || r.config()["future_field"] == nil {
+		t.Error("config resume called out or lost a field")
 	}
 	if code, _, _ := r.run(r.cli.Config, ""); code != 2 {
 		t.Errorf("no setting: exit %d", code)

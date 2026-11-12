@@ -347,7 +347,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, c caller) {
 		p := st.Pairings[c.pairing]
 		me = wire.Me{Owner: c.owner, PairingID: c.pairing, Machine: p.Machine, KeyExpiresAt: p.Expires, Test: p.Test}
 		if o := st.Owners[c.owner]; o != nil {
-			me.Settings = o.Settings
+			me.Settings = wire.Settings{QuestionTimeout: o.Settings.QuestionTimeout}
 		}
 		for _, a := range st.Agents {
 			if a.Pairing == c.pairing && a.Kind != wire.KindStanding && a.Open() {

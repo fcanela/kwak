@@ -85,7 +85,7 @@ func ceilingOpt(n int) opt {
 // A reaction is not a room message: it never routes, never wakes a session, never starts a run,
 // never answers a question and never resets a loop count (spec 5.3, 5.14).
 func TestReactionNeverRoutesOrRuns(t *testing.T) {
-	e := resumeEnv(t, wire.ResumeAll)
+	e := resumeEnv(t, wire.ResumeReplies, wire.ResumeMentions)
 	dir := t.TempDir()
 	uid := e.endedClaude(100, sid1, dir, "$root")
 	e.l.mu.Lock()
@@ -215,7 +215,7 @@ func TestReactionAfterAnUnknownToken(t *testing.T) {
 // message in the thread starts the count again; the count is saved in state.json (spec 5.15).
 func TestLoopCeiling(t *testing.T) {
 	e := newEnv(t, ceilingOpt(2))
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.connect()
 	dir := t.TempDir()
 	uid := e.endedClaude(100, sid1, dir, "$root")
@@ -285,7 +285,7 @@ func TestLoopCeiling(t *testing.T) {
 // ⏸️, do not count and stay held for the owner (spec 5.15).
 func TestCeilingCountsEachThread(t *testing.T) {
 	e := newEnv(t, ceilingOpt(1))
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.connect()
 	dir := t.TempDir()
 	e.dirs[dir] = true
@@ -357,7 +357,7 @@ func TestCeilingCountsEachThread(t *testing.T) {
 // new message of its thread gets no ⏸️ and the resume is tried again (spec 5.11, 5.15).
 func TestNoPauseWhileItsRunGoes(t *testing.T) {
 	e := newEnv(t, ceilingOpt(1))
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.connect()
 	uid := e.endedClaude(100, sid1, t.TempDir(), "$root")
 	e.deliver(event("$a1", bob, e.clk.Now(), inThread(text("x"), "$root")))
@@ -379,7 +379,7 @@ func TestNoPauseWhileItsRunGoes(t *testing.T) {
 // again, even when the person's message does not reach it (spec 5.15).
 func TestResetWakesAPausedSession(t *testing.T) {
 	e := newEnv(t, ceilingOpt(2))
-	e.reg.me.Settings.Resume = wire.ResumeAll
+	e.setResume(wire.ResumeReplies, wire.ResumeMentions)
 	e.connect()
 	e.endedClaude(100, sid1, t.TempDir(), "$root")
 	uid2 := e.endedClaude(200, sid2, t.TempDir(), "$root2")
@@ -407,7 +407,7 @@ func TestResetWakesAPausedSession(t *testing.T) {
 // The closed agent of an ended session is not reopened just to react.
 func TestPausedReactionNeedsAnOpenAgent(t *testing.T) {
 	e := newEnv(t, ceilingOpt(1))
-	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.setResume(wire.ResumeReplies)
 	e.connect()
 	dir := t.TempDir()
 	e.endedClaude(100, sid1, dir, "$root")
@@ -590,7 +590,7 @@ func TestShutdownWaitsForRuns(t *testing.T) {
 // A message of another room changes nothing, even when handed to applyLocked directly: no item,
 // no answered question, no loop count reset (spec 5.3, 5.15).
 func TestOtherRoomChangesNothing(t *testing.T) {
-	e := resumeEnv(t, wire.ResumeAll)
+	e := resumeEnv(t, wire.ResumeReplies, wire.ResumeMentions)
 	uid := e.endedClaude(100, sid1, t.TempDir(), "$root")
 	e.l.mu.Lock()
 	e.l.st.Questions["$root"] = &question{Asker: uid, Session: k1, AskedAt: e.clk.Now(), Due: e.clk.Now().Add(time.Hour)}

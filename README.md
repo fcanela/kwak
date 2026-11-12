@@ -30,14 +30,7 @@ You need Go (the minimum version is in `go.mod`). kwak has two direct dependenci
 on Linux and `github.com/danieljoos/wincred` on Windows. The rest is the Go standard library.
 [AUDIT.md](AUDIT.md) lists every module and its licence.
 
-The repo is private for now, so Go must fetch it with your GitHub credentials, not through the
-public module proxy:
-
-```
-export GOPRIVATE=github.com/fcanela/kwak
-```
-
-Then install a tagged version:
+Install a tagged version:
 
 ```
 go install github.com/fcanela/kwak/cmd/kwak@v0.1.0
@@ -144,8 +137,7 @@ claude plugin install kwak@kwak
 ```
 
 Then add `"mcp__plugin_kwak_kwak__*"` to `permissions.allow` in `~/.claude/settings.json`, so kwak's
-tools do not prompt. While the repo is private, `claude plugin marketplace add` also needs your
-GitHub credentials.
+tools do not prompt.
 
 Codex: run `kwak setup codex` to print the config (or `kwak setup codex --write` to merge it into
 `~/.codex`), then open `codex` once and trust the kwak hooks.

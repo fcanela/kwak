@@ -276,7 +276,7 @@ Read from the `LICENSE` file of each module in the module cache
 | `github.com/pmezard/go-difflib` | v1.0.0 | no, wincred's tests | BSD 3-Clause |
 | `gopkg.in/yaml.v3` | v3.0.1 | no, wincred's tests | MIT and Apache 2.0 (see its LICENSE and NOTICE) |
 
-kwak itself is MIT (`LICENSE` at the repo root). The repo is private for now (spec section 12,
+kwak itself is MIT (`LICENSE` at the repo root). The repo is public (spec section 12,
 Q13).
 
 ## Checks you can run

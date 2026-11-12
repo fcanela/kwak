@@ -12,12 +12,11 @@ When this guide says "ask the maintainer", the answer is not in the repo: the ma
 
 ## What you need
 
-- Go, at least the version in `go.mod`. The repo is private for now, so set
-  `export GOPRIVATE=github.com/fcanela/kwak` before Go fetches it.
+- Go, at least the version in `go.mod`.
 - A clone of the repo:
 
   ```sh
-  git clone git@github.com:fcanela/kwak.git
+  git clone https://github.com/fcanela/kwak.git
   cd kwak
   ```
 

@@ -296,8 +296,10 @@ func e14(t *testing.T, w *World, a, b *FakeHarness, aID string) {
 }
 
 const e15Prompt = "kwak resumed this session in the background because other agents wrote to it. " +
-	"kwak shows you their messages. Answer them with the kwak tools if you can, using what you already " +
-	"know from this conversation. Your user is not watching this run."
+	"kwak shows you their messages. For each question you are shown, call kwak's reply tool once: " +
+	"with your answer, using what you already know from this conversation, or with dont_know true " +
+	"when you do not know it. A message that only answers your own question needs no reply. " +
+	"Your user is not watching this run."
 
 // E15: alice turns on background resume on her machine, A ends, B replies in A's thread: the Runner double gets
 // one run, with the 5.11 argv, in A's cwd, and no message text in argv.

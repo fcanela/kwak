@@ -167,6 +167,28 @@ func TestToolsTableMatchesSpec(t *testing.T) {
 	}
 }
 
+// reply takes text or dont_know (decision 45), so only thread is required.
+func TestReplyDontKnowSchema(t *testing.T) {
+	for _, tl := range Tools() {
+		if tl.Name != "reply" {
+			continue
+		}
+		var schema struct {
+			Required   []string `json:"required"`
+			Properties map[string]struct {
+				Type string `json:"type"`
+			} `json:"properties"`
+		}
+		json.Unmarshal(tl.InputSchema, &schema)
+		if !reflect.DeepEqual(schema.Required, []string{"thread"}) || schema.Properties["dont_know"].Type != "boolean" ||
+			!strings.Contains(tl.Description, "dont_know true when you do not know the answer") {
+			t.Fatalf("reply: %s %s", tl.Description, tl.InputSchema)
+		}
+		return
+	}
+	t.Fatal("no reply tool")
+}
+
 func TestIDsAndNotifications(t *testing.T) {
 	msgs := transcript(t, &recorder{},
 		`{"jsonrpc":"2.0","id":"abc-1","method":"ping"}`,

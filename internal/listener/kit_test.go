@@ -388,7 +388,7 @@ func (m *fakeMatrix) Send(ctx context.Context, roomID, txn string, content any) 
 	return id, nil
 }
 
-func (m *fakeMatrix) React(_ context.Context, roomID, txn, eventID, key string) (string, error) {
+func (m *fakeMatrix) React(ctx context.Context, roomID, txn, eventID, key string) (string, error) {
 	m.r.mu.Lock()
 	if gate := m.r.reactGate; gate != nil {
 		m.r.reactHeld++
@@ -397,6 +397,9 @@ func (m *fakeMatrix) React(_ context.Context, roomID, txn, eventID, key string) 
 		m.r.mu.Lock()
 	}
 	defer m.r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err // as the real client: a request on an ended context is not sent
+	}
 	if err := m.check(); err != nil {
 		return "", err
 	}
@@ -499,6 +502,7 @@ func (r *fakeRoom) sentContents() []map[string]any {
 // ---- runner ----
 
 type run struct {
+	ctx  context.Context // the run's context, ended by any stop
 	dir  string
 	argv []string
 	done chan error
@@ -514,7 +518,7 @@ type fakeRunner struct {
 }
 
 func (f *fakeRunner) Start(ctx context.Context, dir string, argv []string, log io.Writer) (func() error, error) {
-	r := &run{dir: dir, argv: argv, done: make(chan error, 1)}
+	r := &run{ctx: ctx, dir: dir, argv: argv, done: make(chan error, 1)}
 	f.mu.Lock()
 	f.runs = append(f.runs, r)
 	stubborn, onCancel := f.stubborn, f.onCancel

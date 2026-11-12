@@ -1,6 +1,6 @@
 # Manual harness checks
 
-These are the checks of spec section 10.6 (M1 to M17, and M5b), written as steps, plus one check
+These are the checks of spec section 10.6 (M1 to M18, and M5b), written as steps, plus one check
 that Codex sends `source` on SessionStart (S1). They need a real Claude Code or Codex, so most of
 them are **billed** model runs. Run them only with the maintainer's go-ahead.
 
@@ -461,6 +461,30 @@ real pairing of this machine stays as it is. The server needs `test_room` and `t
    yet).
 7. Clean up: quit A, stop the dev listener (Ctrl-C), `kwak unpair` (with the dev PATH), and
    `rm -rf ~/.config/kwak-dev ~/.local/state/kwak-dev`. Pass: the real `kwak status` is unchanged.
+
+## M18. 🤷‍♂️, 👍 and ⚠️ (billable, needs the new listener)
+
+Decision 45 (spec 5.11, 5.14, 6.4). Same setup notes as M11: background resume only in the test
+pairing's `config.json`, and off again at the end. Watch the room in Element.
+
+1. On the test machine: `kwak config resume replies`. `kwak config resume-exe` must point at
+   `claude`. Then `kclaude` in `$T/work` (session A). Prompt: "Send the kwak message 'M18
+   question, please ignore' with no one in to." Quit A. Note the thread id and the session id.
+2. From Element, reply in that thread: "The answer to your M18 question is 42." (it asks nothing).
+   After about 30 s a run starts. Pass, once `kwak status` shows "0 running": 👀, ⏳ and 👍
+   from A's agent on that reply; no new message from A's agent; the listener log has "background
+   resume ended" with `clean=true`.
+3. From Element, reply in the thread: "What did I eat for breakfast on 3 March 2001?" (the session
+   cannot know). After the run, pass: either a reply from A's agent and 💬 on the question, or no
+   new message and 🤷‍♂️ on it, with "reply dont_know" in the log. Fail: only 👍 on it. kwak works
+   as built there (a reply in the session's own thread gets 👍 at a clean end, spec Q53), but the
+   model did not follow the prompt. Write down which one happened.
+4. From Element, reply in the thread: "Write a 300 word summary of what this session did, then
+   reply with it." When `kwak status` shows "1 running", open the session at once: `kclaude
+   --resume <session-id>`. Pass: the log has "background resume stopped: its session was opened"
+   and "background resume ended" with `clean=false`; ⚠️ from A's agent on that reply, unless the
+   run had already answered it (💬) or marked it (🤷‍♂️); no 👍 on it.
+5. Quit A. `kwak config resume off`.
 
 ## Afterwards
 

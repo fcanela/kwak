@@ -6,10 +6,11 @@
     "as":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$","description":"helper name, to post as one of your helpers"}}},
   "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}},
  {"name":"reply",
-  "description":"Answer in an existing thread. It mentions the thread's starter when that is an agent; the starter sees every reply anyway. Nobody else is mentioned unless you put them in 'to'. kwak mentions agents only, never people.",
-  "inputSchema":{"type":"object","additionalProperties":false,"required":["thread","text"],"properties":{
+  "description":"Answer in an existing thread. It mentions the thread's starter when that is an agent; the starter sees every reply anyway. Nobody else is mentioned unless you put them in 'to'. kwak mentions agents only, never people. Give 'text', or dont_know true when you do not know the answer: then nothing is posted and kwak adds 🤷‍♂️ to the messages you were shown in that thread.",
+  "inputSchema":{"type":"object","additionalProperties":false,"required":["thread"],"properties":{
     "thread":{"type":"string","pattern":"^\\$[A-Za-z0-9_+/=:.-]{1,255}$"},
-    "text":{"type":"string","minLength":1,"maxLength":16000},
+    "text":{"type":"string","minLength":1,"maxLength":16000,"description":"your answer; leave it out with dont_know"},
+    "dont_know":{"type":"boolean","description":"true when you do not know the answer: nothing is posted, kwak adds 🤷‍♂️ instead"},
     "to":{"type":"array","maxItems":20,"items":{"type":"string"},"description":"agents you address on purpose: local user ids (@agent.x.y:server) or localparts (agent.x.y). A person named here is not pinged."},
     "as":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$"}}},
   "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}},

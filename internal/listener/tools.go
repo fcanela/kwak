@@ -485,17 +485,18 @@ func (l *Listener) questionTimeoutLocked() time.Duration {
 }
 
 func (l *Listener) toolReply(ctx context.Context, s *session, req wire.ToolRequest, raw json.RawMessage) result {
-	var a struct {
-		Thread string   `json:"thread"`
-		Text   string   `json:"text"`
-		To     []string `json:"to"`
-		As     string   `json:"as"`
-	}
+	var a replyArgs
 	if json.Unmarshal(raw, &a) != nil {
 		return fail("kwak could not read the arguments of reply")
 	}
 	if !wire.EventID.MatchString(a.Thread) {
 		return fail("'thread' must be an event id such as $abc")
+	}
+	switch {
+	case a.DontKnow:
+		return l.dontKnow(ctx, s, req, a)
+	case a.Text == "":
+		return fail("reply needs 'text' with your answer, or dont_know true when you do not know it")
 	}
 	if e := checkText(a.Text, a.To, a.As); e != "" {
 		return fail(e)
@@ -553,7 +554,7 @@ func (l *Listener) toolReply(ctx context.Context, s *session, req wire.ToolReque
 	l.st.Threads[root.EventID] = Thread{Latest: ev, TS: l.d.Clock.Now().UnixMilli()}
 	l.dirty = true
 	l.mu.Unlock()
-	l.answered(s.Key, helper, root.EventID)
+	l.answered(s.Key, helper, root.EventID, reactAnswered)
 	text := "Replied as " + l.short(uid) + " in thread " + root.EventID
 	if len(ment) > 0 {
 		shorts := make([]string, len(ment))
@@ -563,6 +564,53 @@ func (l *Listener) toolReply(ctx context.Context, s *session, req wire.ToolReque
 		text += ", mentioning " + strings.Join(shorts, ", ")
 	}
 	return result{text: text + ".\n" + l.personLines(persons) + l.memberLines(ctx, ment) + textNoPoll}
+}
+
+type replyArgs struct {
+	Thread   string   `json:"thread"`
+	Text     string   `json:"text"`
+	DontKnow bool     `json:"dont_know"`
+	To       []string `json:"to"`
+	As       string   `json:"as"`
+}
+
+// dontKnow is reply with dont_know true (decision 45): it posts nothing, and marks 🤷‍♂️ on the
+// messages that a 💬 from a reply in that thread would mark. 'as' picks the agent, as for a reply;
+// 'to' is refused, because nothing is posted, so nobody is addressed. No check runs: no text
+// leaves the machine.
+func (l *Listener) dontKnow(ctx context.Context, s *session, req wire.ToolRequest, a replyArgs) result {
+	switch {
+	case a.Text != "":
+		return fail("give either 'text' or dont_know true, not both")
+	case len(a.To) > 0:
+		return fail("'to' cannot go with dont_know: nothing is posted, so nobody is addressed")
+	}
+	helper, e := l.identity(s, a.As, req.MetaThread)
+	if e != "" {
+		return fail(e)
+	}
+	l.mu.Lock()
+	stok, room := l.standing, l.roomID()
+	l.mu.Unlock()
+	if stok == "" {
+		return fail("kwak is not connected yet; try again in a moment")
+	}
+	root, err := l.threadRoot(ctx, l.d.Matrix(stok), room, a.Thread)
+	if err != nil {
+		return l.readErr(a.Thread, err)
+	}
+	n := l.answered(s.Key, helper, root.EventID, reactUnknown)
+	l.log.Info("reply dont_know", "session", s.Key, "thread", root.EventID, "marked", n)
+	text := "Nothing was posted in thread " + root.EventID + ". "
+	switch n {
+	case 0:
+		return result{text: text + "No message of it waited for an answer from you, so kwak added no " + reactUnknown + ".\n"}
+	case 1:
+		text += "kwak added " + reactUnknown + " to the message of it you were shown since your last post there.\n"
+	default:
+		text += fmt.Sprintf("kwak added %s to the %d messages of it you were shown since your last post there.\n", reactUnknown, n)
+	}
+	return result{text: text}
 }
 
 // threadRoot fetches id, and its thread root when id is itself in a thread, so kwak never starts a

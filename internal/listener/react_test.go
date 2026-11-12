@@ -485,8 +485,9 @@ func TestYouWinGivesUpAfterTheBound(t *testing.T) {
 	e.claudeTree(300)
 	e.child(proc.ID{PID: 300, Start: 300}, 310)
 	done := make(chan wire.HookResponse, 1)
+	timers := e.clk.waiting() // the run's 15 minute limit is one
 	go func() { done <- e.start(310, "claude", sid1, "resume", dir) }()
-	eventually(t, "the stop to wait", func() bool { return e.clk.waiting() > 0 })
+	eventually(t, "the stop to wait", func() bool { return e.clk.waiting() > timers })
 	e.clk.Advance(stopWait)
 	select {
 	case r := <-done:

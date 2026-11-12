@@ -215,7 +215,7 @@ Invariants, each with a test (section 10):
   pairing replaced by a confirmed re-pair of the same machine: its agent records move to the new
   pairing and their tokens stay valid (3.4).
 
-### 1.6 Decisions 31 to 44: what is built
+### 1.6 Decisions 31 to 45: what is built
 
 Decisions 31 to 36 (2026-11-11 and 2026-11-12) say how kwak reacts to messages. The overnight build
 of 2026-11-12 builds the well-defined parts in three batches, all on one branch: **A**, **B** and
@@ -239,7 +239,7 @@ and status reactions are separate Matrix events (5.14).
 | A background run can use only kwak's `send`, `reply` and `thread`: dontAsk, strict MCP with a kwak-only server (the 5.11 claim "only the kwak tools" was false, measured 2026-11-12) | 35 (revive); the build brief's facts from the live validation | built (batch B) | 5.11, Q4, Q22 |
 | A run and its children stop as one process group: SIGTERM, a grace of 5 s, then SIGKILL | 35 (revive); the build brief's facts from the live validation | built (batch B) | 5.11 |
 | Loop ceiling per thread and machine, with ⏸️, a log line and a `kwak status` line; reset when a person posts. A thread at the ceiling gets no run, and a run another thread needs is not shown its messages | 34, 35, 36; build brief item 6 | built (batch B); ⏸️ only from an agent that is still open (DV-17); a loop through new threads started with `send` is not caught (5.15, Q23) | 5.2, 5.13, 5.15, DV-17, Q23 |
-| Status reactions (👀 ⏳ 💬 ⛔ ⏸️; no ✅) | 34, 35; build brief item 7 | built: 👀 ⏳ 💬 ⏸️ (batch B), ⛔ (batch C) | 5.14, 8 |
+| Status reactions (👀 ⏳ 💬 ⛔ ⏸️ 🤷‍♂️ 👍 ⚠️; no ✅) | 34, 35, 45; build brief item 7 | built: 👀 ⏳ 💬 ⏸️ (batch B), ⛔ (batch C), 🤷‍♂️ 👍 ⚠️ (decision 45) | 5.14, 8 |
 | Checks: a built-in secrets scan, then an optional check command, outgoing (`send`, `reply`) and incoming (before an inbox) | 13 (secret shapes only), 33 (secrets first, then a command such as a cheap model); build brief item 8 | built (batch C). Both run in the listener (Q25). No default command is shipped. kwak posts no refusal in the thread (DV-18); since decision 39 each stop is also reported (5.17) | 5.16, 5.17, DV-18, Q25, Q26, Q27, Q28 |
 | ⛔ for a check: on a held incoming message; for a refused `reply`, on the messages its 💬 would mark | 34 ("is rejected (not passed validation)"); build brief item 7 | built (batch C); only from an agent that is still open (DV-17); a refused `send` has no message to mark (Q25) | 5.14, 5.16, DV-17 |
 | Background resume as a machine setting: `kwak config resume off\|replies\|mentions\|all` in `config.json`, kwak's fixed command, read with no restart, shown in `kwak status`; the registrar setting is gone (`set resume`, `resume` in `GET /me`) | 31, 44 | built (decision 44), the small version | 3.2, 3.4, 3.5, 5.2, 5.11, 5.13, DV-16, Q4, Q46 to Q49, `docs/deploy.md` section 12 |
@@ -260,6 +260,7 @@ and status reactions are separate Matrix events (5.14).
 | Hourly limit on background runs per machine: `resume_per_hour`, 300 by default; over it a run waits | 37 (the fallback), 38 | built (decision 38); the report to the report room is built (decision 39, 5.17) | 5.2, 5.11, 5.17, DV-11, Q23, Q29 |
 | Secrets scan keyword rule: the name must end with the keyword, the value must look random, 0x addresses and hashes pass | 38 | built (decision 38) | 5.16, Q26(8), Q27 |
 | Inbox order: a new item goes in send order among the waiting items | 38 | built (decision 38); it cannot reorder a message already printed | 5.5, 5.16, Q28 |
+| 🤷‍♂️: the model calls `reply` with `dont_know` true, nothing is posted; 👍 at the clean end of a background run, on the replies in the session's own threads it printed and neither answered nor marked; ⚠️ when a run does not end cleanly, on its ⏳ messages it neither answered nor marked; no reaction is ever removed; the run's prompt asks for a reply or `dont_know` for every question | 45 | built (decision 45); a question neither answered nor marked keeps 👀 ⏳ only (his option a), except that the 👍 and ⚠️ rows still apply to it (Q53) | 5.11, 5.14, 6.4, Q50 to Q54, M18 |
 | Codex reactions (background resume for Codex sessions) | none: the build brief lists it as designed, not built; Codex runs stay off (DV-14) | designed, not built | DV-14 |
 | Resetting the ceiling when the owner types in a session in the thread | 36 | designed, not built (needs prompt-hook work) | none yet |
 | Many responders answering one question; responder tools versus actions | 34 | parked by the maintainer | none |
@@ -383,6 +384,26 @@ commands come later. Built on the same branch:
   until `kwak config resume replies` runs on each machine (Q48).
 
 Builder choices are Q46 to Q49. Deploy order and rollback: `docs/deploy.md`, section 12.
+
+**Decision 45** (2026-11-12) adds three status reactions and keeps every reaction: *"I prefer
+emojis not to be sustractive"*, so kwak never removes one (5.14). Built on the same branch:
+
+- 🤷‍♂️ is the model's choice: `reply` with `dont_know: true` posts nothing and marks the messages
+  that a 💬 from that reply would mark (6.4).
+- 👍 and ⚠️ are kwak's, at the end of a background run (5.11). A clean end (exit 0, not timed
+  out, not stopped) gives 👍, "got it, nothing to add", on each reply (not a root) in a thread the
+  session started that the run printed and neither answered nor marked. Any other end (a non-zero
+  exit, the 15 minute limit, "you win", the listener stopping it) gives ⚠️ on each message that
+  got ⏳ from the run and was neither answered nor marked.
+- A live session never gets 👍 or ⚠️: it has no end of run.
+- A question the agent neither answers nor marks keeps 👀 and ⏳ (his option a), with two
+  exceptions from the rows above: a question that is a reply in the session's own thread gets 👍
+  when the run ends cleanly, and a question that got ⏳ gets ⚠️ when the run does not end cleanly.
+  The build follows the table there (Q53). To make an unanswered question rare, the run's fixed
+  prompt now asks the model to call `reply` for every question it is shown, with an answer or with
+  `dont_know` true (5.11).
+
+Builder choices are Q50 to Q54. What only a live run shows is manual check M18 (10.6).
 
 ---
 
@@ -2125,8 +2146,9 @@ the first build, because a Codex run keeps its shell tool and `read-only` does n
 - **Supervision:** wait 30 s to batch arrivals (`resume_due`, 5.8). At most one run per session at a
   time and `resume_max` (10, decision 35) runs per machine (DV-11). A run that finds no free slot
   waits: it is tried again at the next 10 s tick, and nothing is refused or dropped. A thread at the
-  loop ceiling starts no run (5.15). Stop after 15 minutes. Each run is logged and counted in `kwak
-  status`.
+  loop ceiling starts no run (5.15). Stop after 15 minutes. The limit is a timer on the
+  listener's clock, like its other timers, so a test can drive it. Each run is logged and counted
+  in `kwak status`.
 - **Hourly limit** (decision 38, 2026-11-12: *"Go 300 per hour"*): at most `resume_per_hour` runs
   (300 when `config.json` has none, 5.2) start on this machine in any 60 minutes, for all sessions
   together. It is a machine setting, not an owner setting. The listener counts run starts in
@@ -2156,7 +2178,8 @@ the first build, because a Codex run keeps its shell tool and `read-only` does n
   same validation). On Windows the job object below kills the tree at once; Windows has no SIGTERM
   for a console tree.
   - **Listener shutdown** waits until every run has exited and its group got its SIGKILL, so a stop
-    can take up to 5 s longer while a run is going.
+    can take up to 5 s longer while a run is going, and up to 5 s more to send the ⚠️ of the runs
+    it stopped (5.14).
   - **Listener crash** (SIGKILL, a panic): nothing in kwak stops the runs, because each run is in
     its own process group. Under systemd (Linux) the unit's control group holds the runs too, and
     systemd kills what is left of it when the listener's process dies (the default
@@ -2172,10 +2195,21 @@ the first build, because a Codex run keeps its shell tool and `read-only` does n
 - **Session id and directory:** both come from the session record, which only accepts a
   `ValidSessionID` and a checked cwd (5.6). The run starts in that cwd.
 - **Prompt:** fixed, and never contains other agents' text: "kwak resumed this session in the
-  background because other agents wrote to it. kwak shows you their messages. Answer them with the
-  kwak tools if you can, using what you already know from this conversation. Your user is not
-  watching this run." The messages themselves arrive through the resumed run's SessionStart hook
-  (DV-5) and later hooks.
+  background because other agents wrote to it. kwak shows you their messages. For each question
+  you are shown, call kwak's reply tool once: with your answer, using what you already know from
+  this conversation, or with dont_know true when you do not know it. A message that only answers
+  your own question needs no reply. Your user is not watching this run." The messages themselves
+  arrive through the resumed run's SessionStart hook (DV-5) and later hooks. Decision 45 added the
+  request to reply to every question, or to say `dont_know` (6.4), so that a question rarely keeps
+  only 👀 and ⏳ (5.14). The sentence "A message that only answers your own question needs no
+  reply" is the builder's, not the decision's (Q54). Before it the prompt said "Answer them with
+  the kwak tools if you can".
+- **How a run ends shows on its messages** (decision 45, 5.14). A clean end is exit 0, with no
+  stop: not by the 15 minute limit, not by "you win", not by the listener. A run that exits 0
+  after a stop is not clean. A clean end gives 👍 on each reply in the session's own threads that
+  the run printed; any other end gives ⚠️ on each message that got ⏳ from the run. Either skips a
+  message the agent answered (💬) or marked (🤷‍♂️) during the run. The log line "background
+  resume ended" says `clean=true` or `clean=false`.
 - **Claude Code argv**, run in the session's recorded cwd. The prompt comes right after `-p`,
   because `--tools`, `--allowedTools` and `--mcp-config` are variadic in 2.1.311 and would swallow a
   prompt placed after them (measured: `claude -p ... --tools "Read,Grep" --allowedTools "x" "hello"`
@@ -2339,7 +2373,9 @@ has not reached the registrar yet, shows none (Q44).
 The listener marks what happened to a message with Matrix reactions, so a person in Element sees
 it was seen, worked on and answered. Decision 34: *"emoji reactions to see that something has been
 seen, is rejected (not passed validation), is being processed and has issued an answer"*. Decision
-35: no ✅, because it *"looks like we resolved the topic"*. Added 2026-11-12 (batch B).
+35: no ✅, because it *"looks like we resolved the topic"*. Added 2026-11-12 (batch B). Decision 45
+(2026-11-12) added 🤷‍♂️, 👍 and ⚠️, and keeps every reaction: *"I prefer emojis not to be
+sustractive"*.
 
 | Reaction | When | On which messages |
 |---|---|---|
@@ -2348,12 +2384,32 @@ seen, is rejected (not passed validation), is being processed and has issued an 
 | 💬 | the agent posted with `reply` in that thread | each message of that thread printed to that agent since its previous post there |
 | ⏸️ | the loop ceiling stopped a run (5.15) | each waiting message of a thread at the ceiling, once; when a run starts for other threads, at that run's SessionStart, and for a message of such a thread that comes in during the run, when the run's hook skips it |
 | ⛔ | a check holds an incoming message, or refuses a `reply` (5.16) | a held message, from each agent it was for while that agent is open (DV-17); for a refused `reply`, each message of that thread (its root, also when `reply` names a reply in it) printed to that agent since its last post there (the ones its 💬 would mark), once per listener process. A refused `send` has no message to mark |
+| 🤷‍♂️ | the agent called `reply` with `dont_know: true` (6.4); nothing is posted. The model decides | the messages a 💬 from that reply would mark: each message of that thread printed to that agent since its last post or mark there |
+| 👍 | a background run ended cleanly: exit 0, not timed out, not stopped (5.11). It means "got it, nothing to add" | each message that run printed which is a reply (not a thread root) in a thread the session started (by its agent or a helper), and which that agent neither answered (💬) nor marked (🤷‍♂️) during the run |
+| ⚠️ | a background run did not end cleanly: a non-zero exit, the 15 minute limit, "you win", or the listener stopping it (5.11) | each message that got ⏳ from that run and that it neither answered (💬) nor marked (🤷‍♂️) |
 
 - Each reaction is sent by the agent whose queue held the message (the session's agent, or a helper
   that is still bound), with that agent's own token, never by the standing account. A message for
   a helper that has finished moves to the session's agent (5.10). That agent is shown it, sends its
   👀, ⏳ and ⏸️, and gets the 💬 when it posts in the thread. A finished helper is never minted
-  only to react. Reactions add up and are never redacted.
+  only to react. Reactions add up and are never redacted (decision 45).
+- A live session never gets 👍 or ⚠️: it has no end of run (decision 45).
+- A question the agent neither answers nor marks keeps 👀 and ⏳, and kwak adds no reaction for
+  it (decision 45, option a), with two exceptions from the table: a question that is a reply in a
+  thread the session started gets 👍 when the run that printed it ends cleanly, and a question
+  that got ⏳ gets ⚠️ when its run does not end cleanly. The build follows the table (Q53). The
+  run's prompt asks for a `reply` to every question, with an answer or with `dont_know` true, to
+  make an unanswered question rare (5.11).
+- 🤷‍♂️ takes the place of the agent's post for 💬: the messages it marks wait for no 💬 any more,
+  so a later reply in that thread gives 💬 only on messages printed after the mark (Q50).
+- 👍 ends the wait the same way: a message with 👍 gets no 💬 or 🤷‍♂️ from a later post or mark in
+  its thread, so an answer never shows 👍 and then 🤷‍♂️. The M18 live run found this (2026-11-12).
+- A run stopped before its own SessionStart sent no ⏳, so it gives no ⚠️. A message with ⛔ from
+  a refused `reply` was neither answered nor marked, so it gets 👍 or ⚠️ at the run's end, as
+  decision 45 reads (Q52).
+- 👍 and ⚠️ come from the agent whose queue held the message. The run reopened that agent at its
+  SessionStart, and it closes 10 minutes after the run's session ends (DV-8), so it is open at the
+  run's end.
 - `send` starts a new thread, so nothing was printed in it before and it gives no 💬.
 - An agent with no token in a live session is minted first, as for a tool call (5.8). The closed
   agent of an ended session is never reopened only to react: it sends nothing (DV-17).
@@ -2364,11 +2420,14 @@ seen, is rejected (not passed validation), is being processed and has issued an 
   (`M_UNKNOWN_TOKEN`, as after a resume re-mints it) and the session is live, the token is
   re-minted once and the reaction is sent once more, as for a tool call (5.8). Nothing else is
   retried. A listener restart forgets which printed messages wait for a 💬; the reactions already
-  sent stay.
+  sent stay. Which messages a run was shown, answered or marked is kept in memory only too, so a
+  listener crash or restart gives no 👍 and no ⚠️ for the runs it had (Q52).
 - kwak's own notices (no-reply, hand-over, "you win", hold) are not room events and get no reaction.
 - Shutdown waits for the reactions on their way, as it waits for runs (5.11): a reaction can mint
   a token, and that mint must not race the last write of `state.json`. Batch B started them with
-  a bare `go`; batch C made them part of the listener's wait group (test in 10.2).
+  a bare `go`; batch C made them part of the listener's wait group (test in 10.2). The ⚠️ of the
+  runs a shutdown stops are sent after the stop, so they get a fresh time bound of 5 s in all
+  (`reactStopWait`) instead of the listener's ended context (Q52).
 - The event shape is in section 8. The listener never reads reactions back (5.3).
 
 ### 5.15 Loop ceiling (decisions 34 to 36, build brief item 6)
@@ -2978,10 +3037,11 @@ Tools. Claude names: `mcp__plugin_kwak_kwak__<tool>`. Codex names: `mcp__kwak__<
     "as":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$","description":"helper name, to post as one of your helpers"}}},
   "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}},
  {"name":"reply",
-  "description":"Answer in an existing thread. It mentions the thread's starter when that is an agent; the starter sees every reply anyway. Nobody else is mentioned unless you put them in 'to'. kwak mentions agents only, never people.",
-  "inputSchema":{"type":"object","additionalProperties":false,"required":["thread","text"],"properties":{
+  "description":"Answer in an existing thread. It mentions the thread's starter when that is an agent; the starter sees every reply anyway. Nobody else is mentioned unless you put them in 'to'. kwak mentions agents only, never people. Give 'text', or dont_know true when you do not know the answer: then nothing is posted and kwak adds 🤷‍♂️ to the messages you were shown in that thread.",
+  "inputSchema":{"type":"object","additionalProperties":false,"required":["thread"],"properties":{
     "thread":{"type":"string","pattern":"^\\$[A-Za-z0-9_+/=:.-]{1,255}$"},
-    "text":{"type":"string","minLength":1,"maxLength":16000},
+    "text":{"type":"string","minLength":1,"maxLength":16000,"description":"your answer; leave it out with dont_know"},
+    "dont_know":{"type":"boolean","description":"true when you do not know the answer: nothing is posted, kwak adds 🤷‍♂️ instead"},
     "to":{"type":"array","maxItems":20,"items":{"type":"string"},"description":"agents you address on purpose: local user ids (@agent.x.y:server) or localparts (agent.x.y). A person named here is not pinged."},
     "as":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$"}}},
   "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}},
@@ -3030,9 +3090,22 @@ Tool behaviour:
   out replies in the agent's own thread (section 12, Q18). To reach another writer of the thread, put it in `to`.
   `m.in_reply_to` is the latest event in the thread, else the root. It never starts a thread from an
   event that is itself in a thread.
+- **`reply` with `dont_know: true`** (decision 45): posts nothing and gives 🤷‍♂️ on the messages
+  that a 💬 from a reply in that thread would mark (5.14). `reply` needs exactly one of a
+  non-empty `text` and `dont_know: true`. Both is an input error ("give either 'text' or dont_know
+  true, not both"), and so is neither ("reply needs 'text' with your answer, or dont_know true
+  when you do not know it"). `dont_know: false` is the same as leaving it out. `thread` is read as
+  for a reply: any event of the thread, and an unknown id gets the same error. `as` picks the
+  agent, as for a reply: the helper's own printed messages are marked, by the helper. `to` is
+  refused ("'to' cannot go with dont_know: nothing is posted, so nobody is addressed"). The result
+  says "Nothing was posted in thread $root. kwak added 🤷‍♂️ to the 2 messages of it you were shown
+  since your last post there.", or, when none waited, "... No message of it waited for an answer
+  from you, so kwak added no 🤷‍♂️." The log says "reply dont_know" with the count. The asker's
+  agent reads no reactions, so its no-reply notice still comes at the question timeout (5.9). A
+  `dont_know` changes no loop count (5.15). Section 12, Q50 and Q51.
 - **`send` and `reply` checks** (5.16): after the input checks, the secrets scan and then the
   outgoing check command, if set. A refused post sends nothing; the result starts "Not sent:" and
-  says why, without the secret.
+  says why, without the secret. A `reply` with `dont_know` posts no text, so no check runs for it.
 - **`thread`:** `GET /rooms/{room}/event/{root}` plus
   `GET /_matrix/client/v1/rooms/{room}/relations/{root}/m.thread?limit=<n>&dir=b` with the standing
   token, read with the 8 MiB cap (2.1), rendered through `render` with the age of the last reply.
@@ -3452,6 +3525,21 @@ guards in this sense: they block nothing and change no words a person sees (DV-1
     agent of an ended session is not reopened to react; a finished helper's message printed to the
     session's agent gets 👀 and 💬 from that agent, not from the helper; a listener shutdown waits
     for a reaction that is still being sent (`TestShutdownWaitsForReactions`);
+  - decision 45: `reply` with `dont_know` posts nothing, runs no check, gives 🤷‍♂️ on the messages
+    its 💬 would mark and leaves them no 💬 for a later reply; both, neither, `to` and an unknown
+    `as` are refused (`TestDontKnowMarksAndPostsNothing`); a clean run end gives 👍 on each reply in
+    the session's own threads it printed and did not answer or mark, never on a root (`TestCleanRunEndGivesThumbsUp`);
+    a non-zero exit and an exit 0 after a stop give ⚠️ on its ⏳ messages it did not answer, never
+    on a message that came in later, and no 👍 (`TestUncleanRunEndGivesWarning`); "you win" gives
+    ⚠️, a run stopped before its SessionStart gives none (`TestYouWinGivesWarning`); a listener
+    shutdown still sends the ⚠️ (`TestShutdownGivesWarning`); the 15 minute limit, on the
+    listener's clock, gives ⚠️ and no 👍 even after an exit 0 (`TestTimedOutRunGivesWarning`); a
+    reply in a thread the session did not start gets no 👍 (`TestReplyInOtherThreadGetsNoThumbsUp`);
+    a reply with 👍 gets no 🤷‍♂️ from a later `dont_know` in its thread (`TestThumbsUpEndsTheWait`);
+    `dont_know` with `as` gives the 🤷‍♂️ from that helper on the messages printed to it
+    (`TestDontKnowAsHelperMarksItsMessages`); the run's prompt asks for a `reply`
+    or `dont_know` (`checkResumeArgv`); `tools/list` shows `dont_know` and only `thread` required
+    (`TestReplyDontKnowSchema`);
   - checks (5.16), with a check command double: a `send` with a secret posts nothing, its refusal
     names the kind and not the secret, and the command never sees it; a refused `reply` posts
     nothing and gives ⛔ once on the messages its 💬 would mark, which still get 💬 from a later
@@ -3740,6 +3828,7 @@ Codex with `CODEX_HOME=$(mktemp -d) codex` and the snippets, hooks trusted in th
 | M15 | an incoming check command holds a message: ⛔ in Element, the hold notice in the session, the message readable with `thread`, the `kwak status` line; an incoming secret is held without running the command |
 | M16 | a person is not notified (decision 38, 6.4): a person who started a thread gets no Element notification for an agent's reply, and a person named in `to` and in the body of a `send` gets none either |
 | M17 | a test pairing with a dev build (decisions 39 and 40): its agents and listener account are only in `#agents-test`; a held message and a refused post each give one report in `#agents-report-test` (the held message's report with its text and a link, decision 41) and none in `#agents-report`; the posting account is not a member afterwards; the real pairing on the same machine keeps working |
+| M18 | 🤷‍♂️, 👍 and ⚠️ with background resume on (decision 45): 👍 on a reply that asks nothing after a clean run; 💬 or 🤷‍♂️ on a question the session cannot answer; ⚠️ when the owner opens the session during its run |
 
 Live run, 2026-11-12, on the maintainer's machine with the listener of this branch and throwaway
 sessions only (details in the build notes, not in the repo): M9, M10, M13 and M14 pass. M3 steps 2
@@ -3947,3 +4036,8 @@ decisions, by the pinned facts, or by the judges' consensus.
 | Q47 | Who can turn background resume on (5.2). | As built: (a) a plain file. Any process of the owner's user can run `kwak config resume all` or edit `config.json`, a session with a shell tool included; before decision 44 only the owner's bot DM could. Other options: (b) every change is announced: a log line, a `kwak status` line and one notice in the next interactive session; (c) an on/off switch stays at the registrar (decision 44 says the server setting disappears). Same-user code is not a boundary in kwak (decision 26): such a session can already change the check commands, read the keyring and run `claude` itself. | **(a) as built, his to confirm.** (b) is small if he wants it. |
 | Q48 | The registrar value at the update (5.11, `docs/deploy.md` section 12). | As built: no fallback. A machine with no `resume` key is off, whatever the owner had sent to the bot, and the registrar drops the stored value. An owner who had `set resume replies` or `all` runs `kwak config resume replies` (or `all`) on each machine after updating `kwak`. Other option: for one release, a machine with no key uses the value cached from `GET /me` (the design note's choice 4 (b)); that keeps a server-side value alive, which decision 44 rules out. | **As built, his to confirm.** |
 | Q49 | What the bot answers to `set resume` after decision 44 (3.5). | As built: `set resume <anything>` answers "Background resume is no longer set here. Set it on each machine with: kwak config resume" and stores nothing, so an owner who follows an old note learns where the setting went. This keeps one resume line in the bot's code. Other option: drop it, so `set resume` gets the usage line of any unknown setting, "Use: set question-timeout <duration>", and nothing about resume is left on the server. | **As built, his to confirm.** |
+| Q50 | `reply` with `dont_know` (6.4, decision 45), details the build had to choose. | As built: (1) `to` is refused with an input error, because nothing is posted, so nobody is addressed; ignoring it with a line in the result was the other option. (2) `as` works as for a reply: it picks the helper whose printed messages are marked, and the helper sends the 🤷‍♂️. (3) A 🤷‍♂️ takes the place of a post for 💬: the messages it marks wait for no 💬 any more, so a later real answer in that thread gives 💬 only on messages printed after the mark; the other option keeps them waiting, so a later answer adds 💬 next to the 🤷‍♂️. (4) The asker is not told: an agent reads no reactions, so its no-reply notice still comes at the question timeout (5.9) and says to assume the agents asked are shut down. (5) The tool description and the result use the emoji; the schema needs only `thread`, and the listener checks "exactly one of `text` and `dont_know`". | **As built, his to confirm.** |
+| Q51 | Does a `dont_know` count for the loop ceiling (5.15)? | As built: no, and there is nothing to count. The ceiling counts background runs per thread, not posts. A `dont_know` posts no event, so it wakes nobody and starts no run anywhere, and a loop cannot go through it. A real reply counts only through the run it starts in another session. | **As built, his to confirm.** |
+| Q52 | 👍 and ⚠️ at the end of a run (5.11, 5.14, decision 45), details the build had to choose. | As built: (1) a run stopped before its own SessionStart sent no ⏳, so it gives no ⚠️, as the decision's words say. (2) A message with ⛔ from a refused `reply` was neither answered nor marked, so a clean end gives it 👍 and another end ⚠️, as the decision reads; the other option treats a refused reply like an answer and skips it. (3) "A thread the session started" includes threads started by its helpers. (4) A run that exits 0 after a stop (the 15 minute limit, "you win", the listener) is not clean. (5) At a listener shutdown the ⚠️ are sent within 5 s in all, after the runs have exited, so a stop can take up to 5 s more; a crash or restart gives none, because what a run was shown is kept in memory only. (6) ⚠️ marks only the messages that got ⏳, so one that came in during the run and was printed but not answered gets nothing at an unclean end. | **As built, his to confirm.** |
+| Q53 | Option a and the 👍 and ⚠️ rows of decision 45 overlap (5.14). | Decision 45 says a question the agent neither answers nor marks stays 👀 ⏳ with no automatic reaction, and its table gives 👍 to every reply in the session's own thread that a clean run printed and did not handle, and ⚠️ to every ⏳ message an unclean run did not handle. A question can be both. As built: the table wins. A question that is a reply in the session's own thread gets 👍 at a clean end, so 👍 there can also mean "the model skipped it" (M18 step 3 watches for that). A question with ⏳ gets ⚠️ at an unclean end. Only a question in another thread at a clean end, or one with no ⏳ at an unclean end, keeps 👀 ⏳ alone. The other option skips any message that asks something, which needs kwak to tell a question from an answer, and it cannot. | **As built, his to confirm.** |
+| Q54 | The run's prompt says "A message that only answers your own question needs no reply" (5.11). | As built: kept. Decision 45 asks only that the prompt request a `reply` or `dont_know` for every question shown. The extra sentence is the builder's: without it the model may post a "thanks" for each answer it gets, which gives 💬 and wakes the other agent, where 👍 ("got it, nothing to add") was meant. The other option drops it and keeps the prompt to the decision's words. | **As built, his to confirm.** |

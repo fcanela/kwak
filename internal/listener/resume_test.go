@@ -88,6 +88,11 @@ func checkResumeArgv(t *testing.T, argv []string) {
 	if argv[1] != "-p" || argv[2] != resumePrompt {
 		t.Fatalf("the prompt is not right after -p: %q", argv)
 	}
+	// Decision 45: the run answers every question it is shown, or says it does not know.
+	if !strings.Contains(argv[2], "For each question you are shown, call kwak's reply tool once") ||
+		!strings.Contains(argv[2], "with dont_know true when you do not know it") {
+		t.Fatalf("the prompt does not ask for a reply or dont_know: %q", argv[2])
+	}
 	variadic := map[string]bool{"--tools": true, "--allowedTools": true, "--mcp-config": true}
 	for i, a := range argv {
 		if variadic[a] && (i+2 >= len(argv) || !strings.HasPrefix(argv[i+2], "--")) {

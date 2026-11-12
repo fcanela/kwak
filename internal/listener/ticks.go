@@ -181,8 +181,10 @@ func (l *Listener) hourly() {
 // ---- background resume (spec 5.11) ----
 
 const resumePrompt = "kwak resumed this session in the background because other agents wrote to it. " +
-	"kwak shows you their messages. Answer them with the kwak tools if you can, using what you already " +
-	"know from this conversation. Your user is not watching this run."
+	"kwak shows you their messages. For each question you are shown, call kwak's reply tool once: " +
+	"with your answer, using what you already know from this conversation, or with dont_know true " +
+	"when you do not know it. A message that only answers your own question needs no reply. " +
+	"Your user is not watching this run."
 
 // resumeStrictMCP picks the run's tool fence (spec 5.11). true: only a kwak MCP server, whose tools
 // are then named mcp__kwak__*. false is the fallback if a live run refuses those tools: the
@@ -236,6 +238,8 @@ type resumeRun struct {
 	held    []fedItem       // waiting messages of threads at the loop ceiling, kept from it (5.15)
 	counted map[string]bool // the threads it was started for, each counted once
 	printed []string        // threads of the messages its hooks printed
+	replies []fedItem       // replies in the session's own threads that its hooks printed (👍)
+	handled map[string]bool // "flightKey event" of the messages answered (💬) or marked (🤷‍♂️) during it
 	seen    bool            // its own SessionStart arrived
 }
 
@@ -334,8 +338,11 @@ func (l *Listener) startResume(key string) {
 			l.log.Info("background resume paused: loop ceiling", "session", key, "thread", t, "turns", l.turnsLocked(t))
 		}
 	}
-	ctx, cancel := context.WithTimeout(l.bg, resumeKill)
-	r := &resumeRun{cancel: cancel, done: make(chan struct{}), fed: fed, held: held, counted: counted}
+	// The 15 minute limit runs on the listener's clock, like its other timers.
+	ctx, cancel := context.WithCancel(l.bg)
+	limit := l.d.Clock.After(resumeKill)
+	r := &resumeRun{cancel: cancel, done: make(chan struct{}), fed: fed, held: held, counted: counted,
+		handled: map[string]bool{}}
 	l.running[key] = r
 	l.st.ResumeRuns++
 	l.hourRuns, l.hourFull = append(l.hourRuns, now), false
@@ -378,12 +385,25 @@ func (l *Listener) startResume(key string) {
 	l.dirty = true
 	l.mu.Unlock()
 	l.log.Info("background resume started", "session", key, "threads", len(counted))
+	l.spawn(func() {
+		select {
+		case <-limit:
+			cancel()
+		case <-ctx.Done():
+		}
+	})
 	// Run waits for this on shutdown, so a stopped run's group gets its SIGKILL (5.11).
 	l.spawn(func() {
 		err := wait()
+		// Clean: exit 0, and not stopped by the 15 minute limit, "you win" or the listener.
+		clean := err == nil && ctx.Err() == nil
 		logf.Close()
+		l.mu.Lock()
+		rs := l.runEndLocked(key, r, clean)
+		l.mu.Unlock()
+		l.react(rs)
 		done()
-		l.log.Info("background resume ended", "session", key, "err", err)
+		l.log.Info("background resume ended", "session", key, "clean", clean, "err", err)
 	})
 }
 

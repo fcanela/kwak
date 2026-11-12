@@ -61,6 +61,10 @@ type Env struct {
 
 	// InsecureHTTPForTests lets the registrar URL be http://. Production never sets it (spec 2.1).
 	InsecureHTTPForTests bool
+
+	// Dev is true in a dev build (make dev, paths.Dev): kwak pair suggests a test pairing, and
+	// kwak status and bare kwak setup say which folder it uses (decision 40).
+	Dev bool
 }
 
 // The environment variables behind Env.Server and Env.Owner.

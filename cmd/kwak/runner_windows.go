@@ -2,6 +2,7 @@ package main
 
 import (
 	"os/exec"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -9,8 +10,9 @@ import (
 
 // startTree starts cmd inside a job object, so cancelling it, and the end of the run, kill the
 // whole tree: an npm install's claude.cmd runs node under cmd.exe, and killing cmd.exe alone
-// leaves node running (spec 5.11).
-func startTree(cmd *exec.Cmd) (func() error, error) {
+// leaves node running (spec 5.11). Windows has no SIGTERM for a console tree, so a cancel kills at
+// once and grace is not used.
+func startTree(cmd *exec.Cmd, _ time.Duration) (func() error, error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return nil, err

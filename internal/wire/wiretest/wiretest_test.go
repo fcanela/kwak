@@ -77,6 +77,7 @@ func TestHTTPTableRules(t *testing.T) {
 	routes := map[string]string{
 		wire.PathPair: "POST", wire.PathPairClaim: "POST", wire.PathStanding: "POST", wire.PathAgents: "POST",
 		wire.PathAgentsClose: "POST", wire.PathAgentsAlive: "POST", wire.PathUnpair: "POST", wire.PathMe: "GET",
+		wire.PathReportJoin: "POST",
 	}
 	success := map[string]bool{}
 	unauth := map[string]bool{}
@@ -161,6 +162,10 @@ func TestHTTPTableCoversSpec(t *testing.T) {
 		{wire.PathAgentsAlive, 400, wire.ErrBadRequest},
 		{wire.PathStanding, 403, wire.ErrOwnerRemoved},
 		{wire.PathMe, 403, wire.ErrOwnerRemoved},
+		{wire.PathReportJoin, 200, ""},
+		{wire.PathReportJoin, 403, wire.ErrNotYours},
+		{wire.PathReportJoin, 404, wire.ErrNoReportRoom},
+		{wire.PathReportJoin, 401, wire.ErrBadKey},
 	}
 	for _, w := range want {
 		found := false
@@ -279,8 +284,22 @@ func TestFixturesFollowNameRules(t *testing.T) {
 	if lp, err := wire.HelperLocalpart(parent, "tests"); err != nil || "@"+lp+":"+ServerName != HelperAgent {
 		t.Errorf("helper fixture %q, rules give %q, %v", HelperAgent, lp, err)
 	}
-	if got := "@" + wire.StandingLocalpart(Owner) + ":" + ServerName; got != StandingUser {
-		t.Errorf("standing fixture %q, rules give %q", StandingUser, got)
+	if got := "@" + wire.ListenerLocalpart(Owner, "brave-heron", false) + ":" + ServerName; got != StandingUser {
+		t.Errorf("listener fixture %q, rules give %q", StandingUser, got)
+	}
+	if got := "@" + wire.ListenerLocalpart(Owner, "calm-otter", true) + ":" + ServerName; got != TestStanding {
+		t.Errorf("test listener fixture %q, rules give %q", TestStanding, got)
+	}
+	if got := "@" + LegacyStandingLocalpart(Owner, false) + ":" + ServerName; got != LegacyStanding {
+		t.Errorf("old standing fixture %q, helper gives %q", LegacyStanding, got)
+	}
+	// The per-owner standing accounts of the builds before decision 42 parse as standing accounts
+	// with no word pair, which is how the registrar's job pass finds them (decision 43).
+	for _, test := range []bool{false, true} {
+		lp := LegacyStandingLocalpart(Owner, test)
+		if n, err := wire.ParseLocalpart(lp); err != nil || n != (wire.Name{Kind: wire.KindStanding, Owner: Owner, Test: test}) {
+			t.Errorf("old standing account %q parses as %+v, %v", lp, n, err)
+		}
 	}
 	for _, key := range []string{OwnerKey, OldOwnerKey, BadKey} {
 		if !regexp.MustCompile(`^kwak_ok_[A-Za-z0-9_-]{43}$`).MatchString(key) {

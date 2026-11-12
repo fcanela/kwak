@@ -19,10 +19,12 @@ import (
 	"github.com/fcanela/kwak/internal/wire"
 )
 
-// Client timeouts (spec 5.6).
+// Client timeouts (spec 5.6). SessionStart may wait for the listener to stop the session's
+// background run, so it gets most of the harness's 10 s hook timeout.
 const (
 	DialTimeout     = 300 * time.Millisecond
 	ExchangeTimeout = 3 * time.Second
+	StartTimeout    = 9 * time.Second
 	EndTimeout      = 1 * time.Second
 )
 
@@ -49,8 +51,11 @@ func Run(h wire.Harness, event string, stdin io.Reader, stdout io.Writer, call C
 		req.Chain = chain()
 	}
 	timeout := ExchangeTimeout
-	if event == wire.EventSessionEnd {
+	switch event {
+	case wire.EventSessionEnd:
 		timeout = EndTimeout
+	case wire.EventSessionStart:
+		timeout = StartTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

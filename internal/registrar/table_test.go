@@ -12,12 +12,34 @@ import (
 // seedPairing writes a pairing of owner whose key is key, as if it had been claimed.
 func (f *fixture) seedPairing(id, owner, key string, confirmed bool) {
 	f.t.Helper()
+	f.seedKind(id, owner, key, confirmed, false)
+}
+
+// seedKind is seedPairing for either kind: test set makes a test pairing (decision 40). The
+// contract pairing wt.PairingID gets the listener account of the fixtures (wt.StandingUser, or
+// wt.TestStanding for a test pairing); any other pairing a fresh word pair. A confirmed pairing's
+// listener account is made at once, as its first POST /standing would (decision 42).
+func (f *fixture) seedKind(id, owner, key string, confirmed, test bool) {
+	f.t.Helper()
 	now := f.clock.Now()
 	err := f.s.Store.Update(func(st *State) error {
 		p := &Pairing{Owner: owner, Machine: wt.Machine, OS: "linux", IP: testIP, KeySHA256: sha(key),
-			Created: now, Expires: now.Add(f.s.Cfg.KeyLifetime.D()), IPs: map[string]time.Time{testIP: now}, LastIP: testIP}
+			Created: now, Expires: now.Add(f.s.Cfg.KeyLifetime.D()), IPs: map[string]time.Time{testIP: now}, LastIP: testIP,
+			Test: test}
 		if confirmed {
 			p.Confirmed = &now
+		}
+		switch {
+		case id == wt.PairingID && owner == wt.Owner && test:
+			p.Listener = strings.TrimSuffix(strings.TrimPrefix(wt.TestStanding, "@"), ":"+testServer)
+		case id == wt.PairingID && owner == wt.Owner:
+			p.Listener = strings.TrimSuffix(strings.TrimPrefix(wt.StandingUser, "@"), ":"+testServer)
+		default:
+			lp, err := f.s.freshListener(st, owner, test)
+			if err != nil {
+				return err
+			}
+			p.Listener = lp
 		}
 		st.Pairings[id] = p
 		return nil
@@ -25,8 +47,10 @@ func (f *fixture) seedPairing(id, owner, key string, confirmed bool) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if err := f.s.ensureStanding(f.t.Context(), owner, id); err != nil {
-		f.t.Fatal(err)
+	if confirmed {
+		if _, e := f.s.ensureListener(f.t.Context(), owner, id); e != nil {
+			f.t.Fatal(e)
+		}
 	}
 }
 
@@ -196,7 +220,26 @@ var tableSetup = map[string]func(f *fixture) string{
 	"me: owner settings":           seedOnly,
 	"me: bad key":                  seedOnly,
 	"me: owner removed":            seedRemoved,
+	"report: join the session's agent": func(f *fixture) string {
+		f.seed()
+		f.sideRooms(false)
+		f.mustAgent(wt.OwnerKey, wire.HarnessClaude, wt.ClaudeSession, "")
+		return ""
+	},
+	"report: join the standing account": seedSide,
+	"report: another pairing's agent":   seedSide,
+	"report: the standing account of the other kind": func(f *fixture) string {
+		f.seed()
+		f.sideRooms(false)
+		f.seedKind(wt.OldPairingID, wt.Owner, wt.OldOwnerKey, true, true)
+		return ""
+	},
+	"report: no report room": seedOnly,
+	"report: unknown field":  seedSide,
+	"report: bad key":        seedSide,
 }
+
+func seedSide(f *fixture) string { f.seed(); f.sideRooms(false); return "" }
 
 func seedOnly(f *fixture) string { f.seed(); return "" }
 

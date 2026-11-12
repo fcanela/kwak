@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -106,6 +107,9 @@ func (l *Listener) hookOp(req wire.HookRequest, chain []proc.ID, claimed bool) w
 		return empty
 	}
 	key := sessionKey(req.Harness, id)
+	if req.Event == wire.EventSessionStart {
+		l.stopRunFor(key, chain)
+	}
 	now := l.d.Clock.Now()
 	l.mu.Lock()
 	paired := l.phase != wire.StateUnpaired
@@ -117,7 +121,9 @@ func (l *Listener) hookOp(req wire.HookRequest, chain []proc.ID, claimed bool) w
 	)
 	switch req.Event {
 	case wire.EventSessionStart:
+		l.react(l.runSeenLocked(key, chain))
 		text, more, ensures = l.startLocked(req, key, id, chain, claimed, now, paired)
+		delete(l.opening, key)
 	case wire.EventSessionEnd:
 		if s := l.findLocked(key, chain); s != nil && s.Ended == nil {
 			l.endLocked(s, now)
@@ -241,7 +247,7 @@ func (l *Listener) startLocked(req wire.HookRequest, key, id string, chain []pro
 	if !paired || len(s.Inbox.Items) == 0 {
 		return "", 0, ensures
 	}
-	text, more := l.drainLocked(&s.Inbox, s.Agent, s.Harness, now)
+	text, more := l.drainLocked(s, "", &s.Inbox, s.Agent, now)
 	return text, more, ensures
 }
 
@@ -304,7 +310,7 @@ func (l *Listener) deliveryHookLocked(req wire.HookRequest, key string, chain []
 			var in struct {
 				Name string `json:"name"`
 			}
-			if json.Unmarshal(req.ToolInput, &in) == nil && wire.HelperName.MatchString(in.Name) {
+			if json.Unmarshal(req.ToolInput, &in) == nil && wire.ValidHelper(in.Name) {
 				l.bindLocked(s, in.Name, req.AgentID)
 			}
 		}
@@ -312,7 +318,7 @@ func (l *Listener) deliveryHookLocked(req wire.HookRequest, key string, chain []
 	if !paired {
 		return "", 0, ensures, pings
 	}
-	q, me := l.queueFor(s, req.AgentID)
+	q, helper, me := l.queueFor(s, req.AgentID)
 	if q == nil || len(q.Items) == 0 {
 		return "", 0, ensures, pings
 	}
@@ -324,21 +330,21 @@ func (l *Listener) deliveryHookLocked(req wire.HookRequest, key string, chain []
 			return stopNotice(q.Items), len(q.Items), ensures, pings
 		}
 	}
-	text, more = l.drainLocked(q, me, s.Harness, now)
+	text, more = l.drainLocked(s, helper, q, me, now)
 	return text, more, ensures, pings
 }
 
-// queueFor picks the inbox a delivery hook drains (spec 5.10, step 3).
-func (l *Listener) queueFor(s *session, agentID string) (*queue, string) {
+// queueFor picks the inbox a delivery hook drains (spec 5.10, step 3), with its helper's name.
+func (l *Listener) queueFor(s *session, agentID string) (*queue, string, string) {
 	if agentID == "" {
-		return &s.Inbox, s.Agent
+		return &s.Inbox, "", s.Agent
 	}
-	for _, h := range s.Helpers {
+	for name, h := range s.Helpers {
 		if h.Bound == agentID && !h.Finished {
-			return &h.Inbox, h.UserID
+			return &h.Inbox, name, h.UserID
 		}
 	}
-	return nil, ""
+	return nil, "", ""
 }
 
 func (l *Listener) bindLocked(s *session, name, agentID string) {
@@ -372,30 +378,68 @@ func (l *Listener) subagentStopLocked(s *session, agentID string) {
 	}
 }
 
-// drainLocked takes what fits the budget from q, marks it delivered and writes state.json before
-// the caller replies (spec 5.5).
-func (l *Listener) drainLocked(q *queue, me string, h wire.Harness, now time.Time) (string, int) {
+// drainLocked takes what fits the budget from the queue of s or of its helper, marks it delivered
+// and writes state.json before the caller replies (spec 5.5). It records what was printed for
+// the status reactions and for a background run of s (5.11, 5.14). A background run is not shown
+// the messages of a thread at the loop ceiling that it was not started for: they stay queued for
+// the owner and get ⏸️ (5.15). The count returned is what is left that this caller may see.
+func (l *Listener) drainLocked(s *session, helper string, q *queue, me string, now time.Time) (string, int) {
 	if len(q.Items) == 0 {
 		return "", 0
 	}
-	items := make([]render.Item, len(q.Items))
-	for i, it := range q.Items {
+	var items, shown []render.Item
+	var held []fedItem
+	for _, it := range q.Items {
+		if l.heldFromRunLocked(s, it) {
+			held = append(held, fedItem{helper, it.EventID, itemThread(it)})
+			continue
+		}
+		shown = append(shown, it)
 		it.Sender = l.short(it.Sender)
-		items[i] = it
+		items = append(items, it)
+	}
+	l.react(l.pausedReactionsLocked(s.Key, held))
+	if len(items) == 0 {
+		return "", 0
 	}
 	if me == "" {
 		me = "this session"
 	}
-	text, used := render.Delivery(l.short(me), items, l.budget(h))
-	for _, it := range q.Items[:used] {
+	text, used := render.Delivery(l.short(me), items, l.budget(s.Harness))
+	printed := map[string]bool{}
+	for _, it := range shown[:used] {
 		q.Delivered[it.EventID] = now
+		printed[it.EventID] = true
 	}
-	q.Items = append([]render.Item(nil), q.Items[used:]...)
+	l.shownLocked(s, helper, shown[:used])
+	rest := make([]render.Item, 0, len(q.Items)-used)
+	for _, it := range q.Items {
+		if !printed[it.EventID] {
+			rest = append(rest, it)
+		}
+	}
+	q.Items = rest
 	l.saveLocked()
-	return text, len(q.Items)
+	return text, len(items) - used
 }
 
-// add queues it unless the queue already holds or delivered it.
+// has reports whether the queue holds or delivered the event id.
+func (q *queue) has(id string) bool {
+	if _, ok := q.Delivered[id]; ok {
+		return true
+	}
+	for _, x := range q.Items {
+		if x.EventID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// add queues it unless the queue already holds or delivered it. It goes after every waiting item
+// sent at the same time or earlier, so a message whose incoming check ended late still waits in
+// send order (decision 38, Q28 (c)); an item with no send time goes last. Items already printed
+// are not waiting, so it never reorders those.
 func (q *queue) add(it render.Item) bool {
 	q.init()
 	if _, ok := q.Delivered[it.EventID]; ok {
@@ -406,7 +450,13 @@ func (q *queue) add(it render.Item) bool {
 			return false
 		}
 	}
-	q.Items = append(q.Items, it)
+	i := len(q.Items)
+	if !it.SentAt.IsZero() {
+		for i > 0 && q.Items[i-1].SentAt.After(it.SentAt) {
+			i--
+		}
+	}
+	q.Items = slices.Insert(q.Items, i, it)
 	return true
 }
 
@@ -474,6 +524,8 @@ func (l *Listener) moveHeldLocked(s *session, now time.Time) {
 	sort.Slice(from, func(i, j int) bool { return from[i].Started.Before(from[j].Started) })
 	for _, o := range from {
 		n := 0
+		var threads []string
+		seen := map[string]bool{}
 		move := func(q *queue, agent string) {
 			q.init()
 			for _, it := range q.Items {
@@ -481,20 +533,49 @@ func (l *Listener) moveHeldLocked(s *session, now time.Time) {
 				it.Note = "addressed to your earlier agent " + l.short(agent) + " (that session ended)"
 				if s.Inbox.add(it) {
 					n++
+					if t := itemThread(it); t != "" && !seen[t] {
+						seen[t] = true
+						threads = append(threads, t)
+					}
 				}
 			}
 			q.Items = nil
 		}
 		move(&o.Inbox, o.Agent)
-		for _, h := range o.Helpers {
+		for _, h := range sortedHelpers(o) {
 			move(&h.Inbox, h.UserID)
 		}
 		o.ResumeDue = nil
 		if n > 0 {
-			o.HandedOver = append(o.HandedOver, handover{Count: n, ToSession: s.SessionID, At: now})
+			o.HandedOver = append(o.HandedOver, handover{Count: n, ToSession: s.SessionID, At: now, Threads: threads})
 			l.log.Info("held messages handed over", "from", o.Key, "to", s.Key, "count", n)
 		}
 	}
+}
+
+// itemThread is the thread an item belongs to, as render shows it: its root, or the item itself
+// when it starts a thread. kwak's own notices without a thread give "".
+func itemThread(it render.Item) string {
+	for _, id := range []string{it.ThreadRoot, it.EventID} {
+		if id != "" && wire.EventID.MatchString(id) {
+			return id
+		}
+	}
+	return ""
+}
+
+// sortedHelpers lists a session's helpers by name, so hand-overs list threads in a stable order.
+func sortedHelpers(s *session) []*helper {
+	names := make([]string, 0, len(s.Helpers))
+	for n := range s.Helpers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]*helper, len(names))
+	for i, n := range names {
+		out[i] = s.Helpers[n]
+	}
+	return out
 }
 
 func (s *session) waiting() int {
@@ -505,7 +586,26 @@ func (s *session) waiting() int {
 	return n
 }
 
-// handoverNoticeLocked tells a resumed session where its messages went.
+// handoverThreads caps the thread ids one notice lists, so it stays under render's cut.
+const handoverThreads = 10
+
+// threadsText ends a notice with the thread ids it is about, at most handoverThreads of them.
+func threadsText(ids []string) string {
+	more := ""
+	if len(ids) > handoverThreads {
+		more = ", and " + strconv.Itoa(len(ids)-handoverThreads) + " more"
+		ids = ids[:handoverThreads]
+	}
+	switch len(ids) {
+	case 0:
+		return "."
+	case 1:
+		return " (thread " + ids[0] + "). Read it with the kwak thread tool."
+	}
+	return " (threads " + strings.Join(ids, ", ") + more + "). Read them with the kwak thread tool."
+}
+
+// handoverNoticeLocked tells a resumed session where its messages went, and in which threads.
 func (l *Listener) handoverNoticeLocked(s *session, now time.Time) {
 	for i := range s.HandedOver {
 		h := &s.HandedOver[i]
@@ -517,9 +617,11 @@ func (l *Listener) handoverNoticeLocked(s *session, now time.Time) {
 		if h.Count == 1 {
 			what = "1 message for you was"
 		}
+		body := what + " handed to session " + h.ToSession + " in this directory on " + h.At.UTC().Format("2006-01-02") +
+			threadsText(h.Threads)
 		s.Inbox.add(render.Item{
 			EventID: "kwak-handover-" + strconv.FormatInt(h.At.UnixNano(), 10), SentAt: now, Reason: render.Notice,
-			Body: what + " handed to session " + h.ToSession + " in this directory on " + h.At.UTC().Format("2006-01-02") + ".",
+			Body: body,
 		})
 	}
 }

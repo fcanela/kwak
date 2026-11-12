@@ -20,7 +20,7 @@ import (
 
 var (
 	errBoom    = errors.New("boom")
-	secretsKey = secrets.OwnerKeyName(wiretest.ServerName)
+	secretsKey = secrets.PairingKeyName(wiretest.ServerName, wiretest.PairingID)
 )
 
 // Fixture processes of the contract test.
@@ -203,14 +203,31 @@ func arrange(t *testing.T, e *env, c wiretest.IPCCase) wire.Harness {
 		xs.Started, xs.LastHook, xs.Volunteer = at("2026-11-02T09:30:00Z"), time.Time{}, true
 		e.l.mu.Lock()
 		e.l.phase, e.l.lastSync, e.l.st.ResumeRuns = wire.StateSyncing, at("2026-11-02T10:41:00Z"), 1
+		e.l.st.Turns["$Qx1abc"] = &turns{N: 50}
+		e.l.st.Turns["$under"] = &turns{N: 49}
+		for range wire.DefaultResumePerHour {
+			e.l.hourRuns = append(e.l.hourRuns, at("2026-11-02T10:20:00Z"))
+		}
+		e.l.st.Checking["$Ev3ghi"] = &pendingCheck{Item: render.Item{EventID: "$Ev3ghi", Sender: wiretest.OtherAgent, Body: "q"}}
+		e.l.st.Rejected = []wire.Rejection{
+			{At: at("2026-11-02T10:30:00Z"), Way: "outgoing", Session: cs.Key, Agent: wiretest.ClaudeAgent, Tool: "reply",
+				Thread: "$Qx1abc", Check: "secrets", Reason: "it looks like it holds a secret (a GitHub token)"},
+			{At: at("2026-11-02T10:35:00Z"), Way: "incoming", Session: cs.Key, Agent: wiretest.ClaudeAgent, Sender: wiretest.OtherAgent,
+				Thread: "$Qx1abc", Event: "$Ev2def", Check: "command", Reason: "it asks for an action"},
+		}
 		e.l.mu.Unlock()
+		e.setChecks("", "/opt/kwak/check-in")
 	case "status, waiting for the keyring":
 		e.l.st.Settings = nil
 		e.setPhase(wire.StateWaitingKeyring, textKeyring)
+		e.l.mu.Lock()
+		e.l.standUser = "" // no POST /standing worked yet, so no listener account is shown
+		e.l.mu.Unlock()
 		e.pidOK.Store(false)
 	case "status, connecting after a state reset":
 		e.l.mu.Lock()
 		e.l.st.Settings, e.l.stateReset, e.l.syncErr = nil, true, "registrar unreachable, HTTP 502"
+		e.l.standUser = "" // the registrar is unreachable, so no POST /standing worked yet
 		e.l.mu.Unlock()
 	case "inbox":
 		s := e.claudeLive(qItem, aItem, cItem)

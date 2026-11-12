@@ -139,6 +139,53 @@ func TestCreateRoom(t *testing.T) {
 	}
 }
 
+// A side room (decisions 39 and 40): another alias, and invite-only with @registrar invited.
+func TestCreateRoomSideRoomInviteOnly(t *testing.T) {
+	var mu sync.Mutex
+	var body map[string]any
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		json.NewDecoder(r.Body).Decode(&body)
+		w.Write([]byte(`{"room_id":"!report:kwak.test"}`))
+	}))
+	defer srv.Close()
+	d := testDeps(t)
+	d.http = srv.Client()
+	code, out, errs := runCmd(t, d, "human-token\n", "create-room", "-homeserver", srv.URL, "-server", "kwak.test",
+		"-alias", "agents-report", "-invite-only")
+	if code != 0 {
+		t.Fatalf("%d %s", code, errs)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if body["room_alias_name"] != "agents-report" || body["name"] != "agents-report" || body["preset"] != "public_chat" {
+		t.Fatalf("body %v", body)
+	}
+	if inv, _ := body["invite"].([]any); len(inv) != 1 || inv[0] != "@registrar:kwak.test" {
+		t.Fatalf("invite %v", body["invite"])
+	}
+	rule := ""
+	for _, s := range body["initial_state"].([]any) {
+		ev := s.(map[string]any)
+		if ev["type"] == "m.room.guest_access" {
+			t.Fatal("a kwak room never gets guest access (decision 39)")
+		}
+		if ev["type"] == "m.room.join_rules" {
+			rule, _ = ev["content"].(map[string]any)["join_rule"].(string)
+		}
+	}
+	if rule != "invite" {
+		t.Fatalf("join rule %q", rule)
+	}
+	if !strings.Contains(out, "#agents-report:kwak.test") || !strings.Contains(out, "invite only") {
+		t.Fatalf("out %q", out)
+	}
+	if code, _, _ := runCmd(t, d, "human-token\n", "create-room", "-homeserver", srv.URL, "-alias", "#agents:kwak.test"); code != 2 {
+		t.Fatal("accepted a full alias for -alias")
+	}
+}
+
 func TestCreateRoomErrorHoldsNoURL(t *testing.T) {
 	srv := httptest.NewTLSServer(http.NotFoundHandler())
 	d := testDeps(t)

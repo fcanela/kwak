@@ -13,10 +13,11 @@ is open.
 
 ## How the probes ran, and the one caveat
 
-- **The spec layout does not work on this laptop.** On the spec's internal bridge, `tuwunel`
+- **The spec layout did not work on the host that ran the probes.** On the spec's internal bridge, `tuwunel`
   resolves to its address but TCP to port 8008 times out. The runner never gets past the 90 s
   readiness wait. I measured this again with F2 alone:
-  `tuwunel resolves to [192.168.208.2] but TCP fails (dial tcp 192.168.208.2:8008: i/o timeout)`.
+  `tuwunel resolves to [192.168.208.2] but TCP fails (dial tcp 192.168.208.2:8008: i/o timeout)`
+  (192.168.208.2 is the address docker gave the throwaway tuwunel test container).
   This is the host firewall, not tuwunel. The cause needs root to read (`iptables -S FORWARD`,
   `iptables -S DOCKER-USER`, `iptables -S DOCKER-FORWARD`, `ipset list -n`). Nothing on the host
   was changed.
@@ -31,7 +32,7 @@ is open.
   one compose network on the deployment host (read, not measured here). If the maintainer wants that measured, run F2 in the spec layout on a host
   whose firewall forwards between containers.
 - The plain command `CGO_ENABLED=0 go test -tags integration ./test/integration/ -v -count=1`
-  fails on this laptop for every test, at readiness, for the reason above. On such a host run
+  fails on that host for every test, at readiness, for the reason above. On such a host run
   `KWAK_IT_SHARED_NETNS=1 make integration`.
 
 ## Results

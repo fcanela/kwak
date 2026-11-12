@@ -22,6 +22,9 @@ on small interfaces it declares itself.
 5. `internal/mcp`: `kwak mcp`. A small JSON-RPC 2.0 server on stdio. It forwards tool calls to the
    listener over the socket.
 6. `internal/render`: turns other agents' messages into framed text for a model. Pure.
+   `internal/check` next to it (added 2026-11-12): the secrets scan, regular expressions only, and
+   the runner of the optional check commands. It starts a process only for a path the owner set
+   with `kwak config check-outgoing` or `check-incoming` (spec 5.16).
 7. `internal/listener`: the daemon. Sync loop, routing, inboxes, sessions, tools, background resume.
 8. `internal/secrets` and `internal/secrets/oskeyring`: the keyring interface, and the only code
    that calls the OS keyring.
@@ -183,7 +186,9 @@ internal/secrets/oskeyring/oskeyring_test.go:11:	"github.com/zalando/go-keyring"
     and never prints it.
 - `kwak hook`, `kwak mcp` and `kwak version` never build a keyring (tested in
   `cmd/kwak/main_test.go`, `TestAdaptersBuildNoKeyringServiceOrHTTP`).
-- The keyring holds exactly one item per machine: service `kwak`, user `<server name>/owner-key`.
+- The keyring holds one item per pairing: service `kwak`, user `<server name>/<pairing id>/owner-key`
+  (since 2026-11-12, decision 40). A machine paired before keeps its old item,
+  `<server name>/owner-key`, until its next `kwak pair` (spec 5.2).
 - `kwak-registrar` does not import the keyring at all.
 
 ## Dependencies

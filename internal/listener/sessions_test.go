@@ -8,6 +8,7 @@ import (
 
 	"github.com/fcanela/kwak/internal/matrix"
 	"github.com/fcanela/kwak/internal/proc"
+	"github.com/fcanela/kwak/internal/render"
 	"github.com/fcanela/kwak/internal/wire"
 	"github.com/fcanela/kwak/internal/wire/wiretest"
 )
@@ -476,5 +477,34 @@ func TestResumeFromSameShellWithoutKnownHarness(t *testing.T) {
 	e.child(h2, 210)
 	if r := e.start(210, "claude", sid1, "resume", cwd); !strings.Contains(r.Text, "| held q") {
 		t.Fatalf("resume printed %q", r.Text)
+	}
+}
+
+// queue.add puts an item after every waiting item sent at the same time or earlier; an item with
+// no send time goes last; a known id is not added twice (decision 38, Q28 (c)).
+func TestQueueAddKeepsSendOrder(t *testing.T) {
+	t0 := at("2026-11-12T10:00:00Z")
+	var q queue
+	for _, it := range []render.Item{
+		{EventID: "$b", SentAt: t0.Add(2 * time.Second)},
+		{EventID: "$d", SentAt: t0.Add(4 * time.Second)},
+		{EventID: "$a", SentAt: t0},
+		{EventID: "$c", SentAt: t0.Add(2 * time.Second)},
+		{EventID: "kwak-notice"},
+		{EventID: "$e", SentAt: t0.Add(3 * time.Second)},
+	} {
+		if !q.add(it) {
+			t.Fatalf("%s not added", it.EventID)
+		}
+	}
+	if q.add(render.Item{EventID: "$c", SentAt: t0}) {
+		t.Fatal("a waiting id was added twice")
+	}
+	var got []string
+	for _, it := range q.Items {
+		got = append(got, it.EventID)
+	}
+	if want := "$a $b $c $d kwak-notice $e"; strings.Join(got, " ") != want {
+		t.Fatalf("order %v, want %s", got, want)
 	}
 }

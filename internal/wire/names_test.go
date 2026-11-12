@@ -145,14 +145,62 @@ func TestCandidates(t *testing.T) {
 	}
 }
 
-func TestStandingLocalpart(t *testing.T) {
-	lp := StandingLocalpart("fcanela")
-	if lp != "agent.fcanela.listener" {
-		t.Fatalf("StandingLocalpart = %q", lp)
+// A listener account name (decision 42) parses back to its owner and word pair, and a test
+// pairing's one has Test set. Neither can be a helper's parent.
+func TestListenerLocalpart(t *testing.T) {
+	cases := []struct {
+		pair string
+		test bool
+		want string
+	}{
+		{"brave-heron", false, "agent.fcanela.brave-heron.listener"},
+		{"brave-heron", true, "agent.fcanela.brave-heron-test.listener"},
 	}
-	n, err := ParseLocalpart(lp)
-	if err != nil || n != (Name{Kind: KindStanding, Owner: "fcanela"}) {
-		t.Fatalf("ParseLocalpart(%q) = %+v, %v", lp, n, err)
+	for _, c := range cases {
+		lp := ListenerLocalpart("fcanela", c.pair, c.test)
+		if lp != c.want {
+			t.Fatalf("ListenerLocalpart(%q, %v) = %q, want %q", c.pair, c.test, lp, c.want)
+		}
+		n, err := ParseLocalpart(lp)
+		if err != nil || n != (Name{Kind: KindStanding, Owner: "fcanela", Pair: c.pair, Test: c.test}) {
+			t.Fatalf("ParseLocalpart(%q) = %+v, %v", lp, n, err)
+		}
+		if !InAgentNamespace(lp) {
+			t.Fatalf("%q is outside the agent namespace", lp)
+		}
+		if _, err := HelperLocalpart(lp, "tests"); !errors.Is(err, ErrBadLocalpart) {
+			t.Fatalf("HelperLocalpart under %q: %v", lp, err)
+		}
+	}
+}
+
+// The per-owner standing accounts of the builds before decision 42 still parse, with no Pair, so
+// the registrar can close their records.
+func TestOldStandingAccountsParse(t *testing.T) {
+	for _, test := range []bool{false, true} {
+		lp := map[bool]string{false: "agent.fcanela.listener", true: "agent.fcanela.listener-test"}[test]
+		n, err := ParseLocalpart(lp)
+		if err != nil || n != (Name{Kind: KindStanding, Owner: "fcanela", Test: test}) {
+			t.Fatalf("ParseLocalpart(%q) = %+v, %v", lp, n, err)
+		}
+		if _, err := HelperLocalpart(lp, "tests"); !errors.Is(err, ErrBadLocalpart) {
+			t.Fatalf("HelperLocalpart under %q: %v", lp, err)
+		}
+	}
+}
+
+// "listener" is no longer a helper name a new helper may take (decision 42), but a helper of that
+// name made before still parses as a helper: its middle part is hex.
+func TestValidHelperReservesListener(t *testing.T) {
+	if ValidHelper("listener") || !ValidHelper("listeners") || !ValidHelper("tests") || ValidHelper("Tests") {
+		t.Fatal("ValidHelper")
+	}
+	if _, err := HelperLocalpart("agent.fcanela.4f2a9c1e7b034d5a", "listener"); !errors.Is(err, ErrBadHelper) {
+		t.Fatalf("HelperLocalpart(listener): %v", err)
+	}
+	n, err := ParseLocalpart("agent.fcanela.4f2a9c1e7b034d5a.listener")
+	if err != nil || n != (Name{Kind: KindHelper, Owner: "fcanela", Hex: "4f2a9c1e7b034d5a", Helper: "listener"}) {
+		t.Fatalf("an old helper named listener: %+v, %v", n, err)
 	}
 }
 
@@ -161,7 +209,7 @@ func TestHelperLocalpart(t *testing.T) {
 		{"agent.fcanela.4f2a9c1e7b034d5a", "tests", "agent.fcanela.4f2a9c1e7b034d5a.tests"},
 		{"agent.fcanela.4f2a9c1e7b034d5a8c0d1e2f3a4b5c6d", "a", "agent.fcanela.4f2a9c1e7b034d5a8c0d1e2f3a4b5c6d.a"},
 		{"agent.fcanela.8261713321e78fea", "x-1-" + strings.Repeat("y", 20), "agent.fcanela.8261713321e78fea.x-1-" + strings.Repeat("y", 20)},
-		{"agent.fcanela.8261713321e78fea", "listener", "agent.fcanela.8261713321e78fea.listener"},
+		{"agent.fcanela.8261713321e78fea", "listeners", "agent.fcanela.8261713321e78fea.listeners"},
 	}
 	for _, c := range good {
 		got, err := HelperLocalpart(c.parent, c.helper)
@@ -192,6 +240,8 @@ func TestHelperLocalpart(t *testing.T) {
 		{"agent.fcanela.4f2a9c1e7b034d5a", "te/sts", ErrBadHelper},
 		{"agent.fcanela.4f2a9c1e7b034d5a", "a" + strings.Repeat("b", 24), ErrBadHelper},
 		{"agent.fcanela.4f2a9c1e7b034d5a", "tests\n", ErrBadHelper},
+		{"agent.fcanela.4f2a9c1e7b034d5a", "listener", ErrBadHelper},
+		{"agent.fcanela.brave-heron.listener", "tests", ErrBadLocalpart},
 	}
 	for _, c := range bad {
 		if got, err := HelperLocalpart(c.parent, c.helper); !errors.Is(err, c.err) || got != "" {
@@ -207,14 +257,22 @@ func TestParseLocalpart(t *testing.T) {
 		in   string
 		want Name
 	}{
-		{"agent.fcanela.4f2a9c1e7b034d5a", Name{KindSession, "fcanela", "4f2a9c1e7b034d5a", ""}},
-		{"agent.fcanela." + hex32, Name{KindSession, "fcanela", hex32, ""}},
-		{"agent.0.4f2a9c1e7b034d5a", Name{KindSession, "0", "4f2a9c1e7b034d5a", ""}},
-		{"agent." + owner32 + ".listener", Name{KindStanding, owner32, "", ""}},
-		{"agent.x-_.listener", Name{KindStanding, "x-_", "", ""}},
-		{"agent.fcanela.4f2a9c1e7b034d5a.tests", Name{KindHelper, "fcanela", "4f2a9c1e7b034d5a", "tests"}},
-		{"agent.fcanela.4f2a9c1e7b034d5a8.tests", Name{KindHelper, "fcanela", "4f2a9c1e7b034d5a8", "tests"}},
-		{"agent.fcanela." + hex32 + ".t", Name{KindHelper, "fcanela", hex32, "t"}},
+		{"agent.fcanela.4f2a9c1e7b034d5a", Name{KindSession, "fcanela", "4f2a9c1e7b034d5a", "", false, ""}},
+		{"agent.fcanela." + hex32, Name{KindSession, "fcanela", hex32, "", false, ""}},
+		{"agent.0.4f2a9c1e7b034d5a", Name{KindSession, "0", "4f2a9c1e7b034d5a", "", false, ""}},
+		{"agent." + owner32 + ".listener", Name{KindStanding, owner32, "", "", false, ""}},
+		{"agent.x-_.listener", Name{KindStanding, "x-_", "", "", false, ""}},
+		{"agent.fcanela.4f2a9c1e7b034d5a.tests", Name{KindHelper, "fcanela", "4f2a9c1e7b034d5a", "tests", false, ""}},
+		{"agent.fcanela.4f2a9c1e7b034d5a8.tests", Name{KindHelper, "fcanela", "4f2a9c1e7b034d5a8", "tests", false, ""}},
+		{"agent.fcanela." + hex32 + ".t", Name{KindHelper, "fcanela", hex32, "t", false, ""}},
+		{"agent.fcanela.listener-test", Name{KindStanding, "fcanela", "", "", true, ""}},
+		{"agent." + owner32 + ".listener-test", Name{KindStanding, owner32, "", "", true, ""}},
+		{"agent.fcanela.4f2a9c1e7b034d5a.listener-test", Name{KindHelper, "fcanela", "4f2a9c1e7b034d5a", "listener-test", false, ""}},
+		{"agent.fcanela.brave-heron.listener", Name{KindStanding, "fcanela", "", "", false, "brave-heron"}},
+		{"agent.fcanela.brave-heron-test.listener", Name{KindStanding, "fcanela", "", "", true, "brave-heron"}},
+		{"agent." + owner32 + ".a-b.listener", Name{KindStanding, owner32, "", "", false, "a-b"}},
+		{"agent.x-_.zzzzzzzzzzzzzzzz-zebra.listener", Name{KindStanding, "x-_", "", "", false, "zzzzzzzzzzzzzzzz-zebra"}},
+		{"agent.fcanela.4f2a9c1e7b034d5a.listener", Name{KindHelper, "fcanela", "4f2a9c1e7b034d5a", "listener", false, ""}},
 	}
 	for _, c := range good {
 		got, err := ParseLocalpart(c.in)
@@ -248,6 +306,11 @@ func TestParseLocalpart(t *testing.T) {
 		"agent.fcanela.Listener",
 		"agent.fcanela.listener.tests",
 		"agent.fcanela.listeners",
+		"agent.fcanela.listener-tests",
+		"agent.fcanela.listener-Test",
+		"agent.fcanela.test-listener",
+		"agent.fcanela.listener-test.tests",
+		"agent.fcanela.listener.test",
 		"agent.fcanela.4f2a9c1e7b034d5.tests",
 		"agent.fcanela." + hex32 + "0.tests",
 		"agent.fcanela.4f2a9c1e7b034d5a.",
@@ -257,6 +320,26 @@ func TestParseLocalpart(t *testing.T) {
 		"agent.fcanela.4f2a9c1e7b034d5a.tests.",
 		"agent.fcanela.4f2a9c1e7b034d5a\n",
 		"agent.fcanela.4f2a9c1e7b034d5a ",
+		"agent.fcanela.brave-heron",
+		"agent.fcanela.brave-heron.listeners",
+		"agent.fcanela.brave-heron.tests",
+		"agent.fcanela.brave-heron.listener.x",
+		"agent.fcanela.brave.listener",
+		"agent.fcanela.brave-.listener",
+		"agent.fcanela.-heron.listener",
+		"agent.fcanela.brave--heron.listener",
+		"agent.fcanela.brave-heron-.listener",
+		"agent.fcanela.brave-heron-tests.listener",
+		"agent.fcanela.brave-heron-test-test.listener",
+		"agent.fcanela.brave-heron-owl.listener",
+		"agent.fcanela.brave-test.listener",
+		"agent.fcanela.test-heron.listener",
+		"agent.fcanela.Brave-heron.listener",
+		"agent.fcanela.brave-her0n.listener",
+		"agent.fcanela.brave_heron.listener",
+		"agent.fcanela.zzzzzzzzzzzzzzzzz-heron.listener",
+		"agent.fcanela.4f2a9c1e-7b034d5a.listener",
+		"agent.fcanela.4f2a9c1e7b034d5a-test.listener",
 	}
 	for _, in := range bad {
 		if got, err := ParseLocalpart(in); !errors.Is(err, ErrBadLocalpart) || got != (Name{}) {
@@ -292,7 +375,9 @@ func TestNameRegexes(t *testing.T) {
 var (
 	shapeSession  = regexp.MustCompile(`^agent\.([a-z0-9][a-z0-9_-]{0,31})\.[0-9a-f]{16}([0-9a-f]{4}){0,4}$`)
 	shapeHelper   = regexp.MustCompile(`^agent\.([a-z0-9][a-z0-9_-]{0,31})\.[0-9a-f]{16,32}\.[a-z][a-z0-9-]{0,23}$`)
-	shapeStanding = regexp.MustCompile(`^agent\.([a-z0-9][a-z0-9_-]{0,31})\.listener$`)
+	shapeStanding = regexp.MustCompile(`^agent\.([a-z0-9][a-z0-9_-]{0,31})\.(listener|listener-test)$`)
+	// decision 42: two words of 1 to 16 letters, neither "test", then an optional -test.
+	shapeListener = regexp.MustCompile(`^agent\.([a-z0-9][a-z0-9_-]{0,31})\.([a-z]{1,16})-([a-z]{1,16})(-test)?\.listener$`)
 )
 
 func shapeOf(lp string) (Kind, int) {
@@ -305,6 +390,9 @@ func shapeOf(lp string) (Kind, int) {
 		k, n = KindHelper, n+1
 	}
 	if shapeStanding.MatchString(lp) {
+		k, n = KindStanding, n+1
+	}
+	if m := shapeListener.FindStringSubmatch(lp); m != nil && m[2] != "test" && m[3] != "test" {
 		k, n = KindStanding, n+1
 	}
 	return k, n
@@ -333,7 +421,7 @@ func TestShapesNeverOverlap(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 2))
 	seen := map[Kind]int{}
 	atoms := []string{"agent", "agent.", ".", "listener", "fcanela", "a", "-", "_", "0", "f", "g",
-		"4f2a", "9c1e7b03", "4d5a8c0d1e2f3a4b", "tests", "x"}
+		"4f2a", "9c1e7b03", "4d5a8c0d1e2f3a4b", "tests", "x", "test", "-test", "brave-heron", ".listener"}
 	alphabet := "abcdefghijklmnopqrstuvwxyz0123456789._-"
 	for i := 0; i < 200000; i++ {
 		var b strings.Builder
@@ -364,6 +452,36 @@ func TestShapesNeverOverlap(t *testing.T) {
 		}
 		seen[checkShapes(t, b.String())]++
 	}
+	// Listener account names (decision 42): a word pair, sometimes broken, then .listener.
+	letters := "abcdefghijklmnopqrstuvwxyz"
+	word := func() string {
+		if r.IntN(8) == 0 {
+			return "test"
+		}
+		var w strings.Builder
+		for j, n := 0, r.IntN(18); j < n; j++ {
+			w.WriteByte(letters[r.IntN(26)])
+		}
+		return w.String()
+	}
+	pairs := 0
+	for i := 0; i < 50000; i++ {
+		lp := "agent.o." + word() + "-" + word()
+		if r.IntN(3) == 0 {
+			lp += "-" + word()
+		}
+		if r.IntN(4) > 0 {
+			lp += ".listener"
+		} else {
+			lp += "." + word()
+		}
+		if checkShapes(t, lp) == KindStanding {
+			pairs++
+		}
+	}
+	if pairs < 100 {
+		t.Errorf("only %d listener account names; the generator is too weak", pairs)
+	}
 	for _, k := range []Kind{KindSession, KindHelper, KindStanding, ""} {
 		if seen[k] < 100 {
 			t.Errorf("only %d random strings of kind %q; the generator is too weak", seen[k], k)
@@ -374,6 +492,7 @@ func TestShapesNeverOverlap(t *testing.T) {
 
 func FuzzParseLocalpart(f *testing.F) {
 	for _, s := range []string{"agent.fcanela.listener", "agent.fcanela.4f2a9c1e7b034d5a",
+		"agent.fcanela.brave-heron.listener", "agent.fcanela.brave-heron-test.listener", "agent.fcanela.listener-test",
 		"agent.fcanela.4f2a9c1e7b034d5a.tests", "agent.a.b.c.d", "agent..", ""} {
 		f.Add(s)
 	}
@@ -386,7 +505,14 @@ func FuzzParseLocalpart(f *testing.F) {
 		var back string
 		switch n.Kind {
 		case KindStanding:
-			back = StandingLocalpart(n.Owner)
+			if n.Pair == "" {
+				back = agentPrefix + n.Owner + "." + ListenerPart
+				if n.Test {
+					back = agentPrefix + n.Owner + "." + testStandingSuffix
+				}
+			} else {
+				back = ListenerLocalpart(n.Owner, n.Pair, n.Test)
+			}
 		case KindSession:
 			back = "agent." + n.Owner + "." + n.Hex
 		case KindHelper:

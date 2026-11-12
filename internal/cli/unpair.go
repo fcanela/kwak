@@ -53,15 +53,16 @@ func (c *CLI) Unpair(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	if err != nil && !*force {
 		return fail(stderr, "%v. Run kwak unpair --force to delete the local files anyway", err)
 	}
-	var serverName, pairingID string
+	var serverName, pairingID, keyName string
 	if cfg != nil {
-		serverName, pairingID = cfg.ServerName, cfg.PairingID
+		serverName, pairingID, keyName = cfg.ServerName, cfg.PairingID, cfg.KeyName()
 	} else {
-		serverName, pairingID = looseIDs(cdir)
+		var keyringUser string
+		serverName, pairingID, keyringUser = looseIDs(cdir)
+		keyName = secrets.KeyName(serverName, pairingID, keyringUser)
 	}
 
 	told := false
-	keyName := secrets.OwnerKeyName(serverName)
 	if cfg != nil {
 		key, kerr := c.env.Secrets.Get(keyName)
 		switch {
@@ -148,26 +149,28 @@ func (c *CLI) Unpair(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// looseIDs reads server_name and pairing_id from a config.json that loadConfig refused, so
-// unpair --force can still delete the key and print the revoke line.
-func looseIDs(dir string) (serverName, pairingID string) {
+// looseIDs reads server_name, pairing_id and keyring_user from a config.json that loadConfig
+// refused, so unpair --force can still delete the key and print the revoke line. keyring_user is
+// only compared with the name kwak derives (secrets.KeyName), never used as it is.
+func looseIDs(dir string) (serverName, pairingID, keyringUser string) {
 	data, err := os.ReadFile(filepath.Join(dir, ConfigFile))
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	var m map[string]any
 	if json.Unmarshal(data, &m) != nil {
-		return "", ""
+		return "", "", ""
 	}
 	sn, _ := m["server_name"].(string)
 	id, _ := m["pairing_id"].(string)
+	keyringUser, _ = m["keyring_user"].(string)
 	if !plainID(sn) {
 		sn = ""
 	}
 	if !plainID(id) {
 		id = ""
 	}
-	return sn, id
+	return sn, id, keyringUser
 }
 
 func plainID(s string) bool {

@@ -401,6 +401,17 @@ func (c *Client) Send(ctx context.Context, roomID, txnID string, content any) (e
 	return r.EventID, err
 }
 
+// React sends a m.reaction with txnID: an annotation of eventID with key, an emoji.
+func (c *Client) React(ctx context.Context, roomID, txnID, eventID, key string) (string, error) {
+	var r struct {
+		EventID string `json:"event_id"`
+	}
+	content := map[string]any{"m.relates_to": map[string]string{"rel_type": "m.annotation", "event_id": eventID, "key": key}}
+	p := v3 + "/rooms" + esc(roomID, "send", "m.reaction", txnID)
+	err := c.do(ctx, http.MethodPut, p, nil, content, &r, SmallLimit)
+	return r.EventID, err
+}
+
 // Sync runs one /sync. since and filter may be empty. The deadline is timeout plus SyncSlack.
 func (c *Client) Sync(ctx context.Context, since, filter string, timeout time.Duration) (*SyncResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout+SyncSlack)

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fcanela/kwak/internal/matrix"
 	"github.com/fcanela/kwak/internal/wire"
 )
 
@@ -36,6 +35,7 @@ type pendingPairing struct {
 	pairingID     string
 	keyExpires    time.Time
 	collected     bool
+	test          bool // bound with `pair test <code>` (decision 40)
 }
 
 func normCode(s string) string {
@@ -199,14 +199,21 @@ func (s *Server) collect(p *pendingPairing) (wire.ClaimResponse, *wire.APIError)
 		return wire.ClaimResponse{}, internalErr
 	}
 	key := KeyPrefix + raw
-	var room string
+	// The room of the pairing's kind: a test pairing gets the test room (decision 39). bind checked
+	// it was joined, so it is known; the listener uses the room id it is handed.
+	room := s.cachedAgentsRoom(p.test)
+	if room == "" {
+		s.Log.Error("claim: no room for the pairing", "pairing", p.pairingID, "test", p.test)
+		return wire.ClaimResponse{}, errExpired
+	}
+	var listener string
 	err = s.Store.Update(func(st *State) error {
 		pr := st.Pairings[p.pairingID]
 		if pr == nil || pr.Revoked != nil {
 			return errors.New("pairing gone")
 		}
 		pr.KeySHA256 = sha(key)
-		room = st.RoomID
+		listener = pr.Listener
 		return nil
 	})
 	if err != nil {
@@ -216,15 +223,24 @@ func (s *Server) collect(p *pendingPairing) (wire.ClaimResponse, *wire.APIError)
 	p.collected = true
 	delete(s.pending, p.code)
 	delete(s.claims, p.claimHash)
+	standing := ""
+	if listener != "" { // always set by bind; POST /standing has the final name anyway
+		standing = s.Cfg.mxid(listener)
+	}
 	return wire.ClaimResponse{
 		Status: wire.ClaimPaired, Owner: p.owner, PairingID: p.pairingID, OwnerKey: key,
 		KeyExpiresAt: p.keyExpires, RoomID: room,
-		StandingUser: s.Cfg.mxid(wire.StandingLocalpart(p.owner)), ServerName: s.Cfg.ServerName,
+		StandingUser: standing, ServerName: s.Cfg.ServerName,
+		Test: p.test,
 	}, nil
 }
 
-// bind runs the bot's `pair <code>` for owner (spec 4 step 4) and returns the reply.
-func (s *Server) bind(ctx context.Context, owner, code string) (string, error) {
+// bind runs the bot's `pair <code>` (or `pair test <code>`, decision 40) for owner (spec 4 step 4)
+// and returns the reply.
+func (s *Server) bind(ctx context.Context, owner, code string, test bool) (string, error) {
+	if test && s.Cfg.TestRoom == "" {
+		return "Test pairings are off on this server: it has no test room. Send pair <code> for a normal pairing.", nil
+	}
 	now := s.now()
 	s.pmu.Lock()
 	s.prunePending(now)
@@ -235,23 +251,32 @@ func (s *Server) bind(ctx context.Context, owner, code string) (string, error) {
 	}
 	p.binding = true
 	s.pmu.Unlock()
-	reply, err := s.bindLocked(ctx, owner, p, now)
+	reply, err := s.bindLocked(ctx, owner, p, now, test)
 	s.pmu.Lock()
 	p.binding = false
 	s.pmu.Unlock()
 	return reply, err
 }
 
-func (s *Server) bindLocked(ctx context.Context, owner string, p *pendingPairing, now time.Time) (string, error) {
+func (s *Server) bindLocked(ctx context.Context, owner string, p *pendingPairing, now time.Time, test bool) (string, error) {
 	var notes []string
 	replaces := p.replaces
 	if replaces != "" {
-		ok := false
+		ok, otherKind := false, false
 		s.Store.View(func(st *State) {
 			r := st.Pairings[replaces]
 			ok = r != nil && r.Revoked == nil && r.Owner == owner && p.replacesOwner == owner
+			otherKind = ok && r.Test != test
 		})
-		if !ok {
+		switch {
+		case otherKind:
+			// A pairing of the other kind is a new pairing, as if the config had been deleted and
+			// paired fresh (decision 41): the old one is not moved and not revoked, so its agents
+			// never change rooms (decision 39).
+			notes = append(notes, fmt.Sprintf("The earlier pairing %s stays live until you revoke it or it expires; to end it, send: revoke %s",
+				replaces, replaces))
+			replaces = ""
+		case !ok:
 			replaces = ""
 			notes = append(notes, "This pairing does not replace an earlier one.")
 		}
@@ -262,18 +287,40 @@ func (s *Server) bindLocked(ctx context.Context, owner string, p *pendingPairing
 	if err != nil {
 		return "", err
 	}
-	if err := s.ensureStanding(ctx, owner, id); err != nil {
-		return "", err
+	// The room of the pairing's kind must be joined: the claim answers its id, and the pairing's
+	// listener account joins it at the first POST /standing.
+	room, e := s.agentsRoom(ctx, test)
+	switch {
+	case e != nil:
+		return "", botErr("Test pairings are off on this server: it has no test room.")
+	case room == "" && test:
+		return "", errors.New("the test room is not joined yet")
+	case room == "":
+		return "", errors.New("the agents room is not joined yet")
 	}
 	expires := now.Add(s.Cfg.KeyLifetime.D())
+	var listener string
 	err = s.Store.Update(func(st *State) error {
 		if o := st.Owners[owner]; o == nil || o.Removed != nil {
 			return errors.New("not an owner")
 		}
+		// The pairing's own listener account (decision 42): a same-kind re-pair keeps the name of
+		// the pairing it replaces, so the account moves with the agents at the confirmation;
+		// anything else gets a word pair the owner never had.
+		if r := st.Pairings[replaces]; replaces != "" && r != nil {
+			listener = r.Listener
+		}
+		if listener == "" {
+			var err error
+			if listener, err = s.freshListener(st, owner, test); err != nil {
+				return err
+			}
+		}
 		st.Pairings[id] = &Pairing{
 			Owner: owner, Machine: p.machine, OS: p.os, IP: p.ip,
 			Created: now, Expires: expires, Replaces: replaces,
-			IPs: map[string]time.Time{p.ip: now}, LastIP: p.ip, LastUsed: now,
+			IPs: map[string]time.Time{p.ip: now}, LastIP: p.ip, LastUsed: now, Test: test,
+			Listener: listener,
 		}
 		return nil
 	})
@@ -281,13 +328,26 @@ func (s *Server) bindLocked(ctx context.Context, owner string, p *pendingPairing
 		return "", err
 	}
 	s.pmu.Lock()
-	p.owner, p.pairingID, p.keyExpires = owner, id, expires
+	p.owner, p.pairingID, p.keyExpires, p.test = owner, id, expires, test
 	close(p.bound)
 	s.pmu.Unlock()
-	s.Log.Info("paired", "owner", owner, "pairing", id, "replaces", replaces)
-	reply := fmt.Sprintf("Paired machine '%s' (%s) as pairing %s, asked from %s at %s UTC. The key expires %s. "+
-		"If you did not just run kwak pair on that machine, send: revoke %s",
-		p.machine, p.os, id, p.ip, p.created.Format("15:04"), expires.Format("2006-01-02"), id)
+	s.Log.Info("paired", "owner", owner, "pairing", id, "replaces", replaces, "test", test)
+	kind := "pairing"
+	if test {
+		kind = "test pairing"
+	}
+	reply := fmt.Sprintf("Paired machine '%s' (%s) as %s (%s %s), asked from %s at %s UTC. Its listener account is %s. "+
+		"The key expires %s. If you did not just run kwak pair on that machine, send: revoke %s",
+		p.machine, p.os, pairLabel(listener), kind, id, p.ip, p.created.Format("15:04"), listener,
+		expires.Format("2006-01-02"), id)
+	if test {
+		rooms := s.Cfg.TestRoom
+		if s.Cfg.TestReportRoom != "" {
+			rooms += " (and " + s.Cfg.TestReportRoom + " for reports)"
+		}
+		reply += fmt.Sprintf("\nThis is a test pairing: its agents and its listener account %s join only %s, never %s.",
+			listener, rooms, s.Cfg.Room)
+	}
 	for _, n := range notes {
 		reply += "\n" + n
 	}
@@ -306,55 +366,4 @@ func (s *Server) newPairingID() (string, error) {
 			return id, nil
 		}
 	}
-}
-
-// ensureStanding creates the owner's standing account at the first pairing, or reopens it after
-// an owner restore (spec 3.10). Its first device is the new pairing's, KWAK-<id>.
-func (s *Server) ensureStanding(ctx context.Context, owner, pairingID string) error {
-	lp := wire.StandingLocalpart(owner)
-	uid := s.Cfg.mxid(lp)
-	var rec *Agent
-	var room string
-	s.Store.View(func(st *State) {
-		if a := st.Agents[lp]; a != nil {
-			cp := *a
-			rec = &cp
-		}
-		room = st.RoomID
-	})
-	if room == "" {
-		return errors.New("the agents room is not joined yet")
-	}
-	if rec != nil && rec.Closed == nil && rec.PendingSince == nil {
-		return nil
-	}
-	now := s.now()
-	if rec == nil || rec.PendingSince != nil {
-		if rec == nil {
-			if err := s.Store.Update(func(st *State) error {
-				st.putAgent(lp, &Agent{Owner: owner, Kind: wire.KindStanding, Created: now, LastActive: now, PendingSince: &now})
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-		_, err := s.HS.Register(ctx, lp, "KWAK-"+pairingID)
-		if err != nil && !matrix.IsCode(err, matrix.ErrUserInUse) {
-			return err
-		}
-		if err := s.HS.SetDisplayName(ctx, uid, lp); err != nil {
-			return err
-		}
-	}
-	if err := s.HS.JoinAs(ctx, uid, room); err != nil {
-		return err
-	}
-	return s.Store.Update(func(st *State) error {
-		a := st.Agents[lp]
-		if a == nil {
-			return errors.New("standing record gone")
-		}
-		a.PendingSince, a.Closed, a.CloseReason, a.CleanupDone = nil, nil, "", false
-		return nil
-	})
 }

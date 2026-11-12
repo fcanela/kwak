@@ -21,6 +21,7 @@ func (c *CLI) Status(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: kwak status")
 		return 2
 	}
+	c.printDev(stdout)
 	var st wire.StatusResponse
 	if err := c.call(context.Background(), wire.OpStatus, &st); err != nil {
 		c.printPairing(stdout)
@@ -31,6 +32,16 @@ func (c *CLI) Status(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	}
 	printStatus(stdout, st)
 	return 0
+}
+
+// printDev says, in a dev build, which folders it uses instead of the real ones (decision 40).
+func (c *CLI) printDev(w io.Writer) {
+	if !c.env.Dev {
+		return
+	}
+	cdir, _ := c.env.ConfigDir()
+	sdir, _ := c.env.StateDir()
+	fmt.Fprintf(w, "Dev build: it uses its own test folder (config %s, state %s), not a real pairing's.\n", cdir, sdir)
 }
 
 func (c *CLI) printPairing(w io.Writer) {
@@ -45,7 +56,11 @@ func (c *CLI) printPairing(w io.Writer) {
 	case err != nil:
 		fmt.Fprintf(w, "The config cannot be read: %v\n", err)
 	default:
-		fmt.Fprintf(w, "This machine is paired as %s on %s (pairing %s, server %s).\n", cfg.Owner, cfg.Machine, cfg.PairingID, cfg.Server)
+		kind := ""
+		if cfg.Test {
+			kind = ", a test pairing"
+		}
+		fmt.Fprintf(w, "This machine is paired as %s on %s (pairing %s, server %s%s).\n", cfg.Owner, cfg.Machine, cfg.PairingID, cfg.Server, kind)
 	}
 }
 
@@ -76,7 +91,14 @@ func printStatus(w io.Writer, st wire.StatusResponse) {
 		fmt.Fprintln(w, "  State reset: messages since the last good state may be missed.")
 	}
 	if st.Owner != "" {
-		fmt.Fprintf(w, "Pairing: %s on %s, pairing %s, server %s\n", st.Owner, st.Machine, st.PairingID, st.Server)
+		kind := ""
+		if st.Test {
+			kind = " (a test pairing: only the test rooms)"
+		}
+		fmt.Fprintf(w, "Pairing: %s on %s, pairing %s, server %s%s\n", st.Owner, st.Machine, st.PairingID, st.Server, kind)
+	}
+	if st.ListenerAccount != "" {
+		fmt.Fprintf(w, "Listener account: %s\n", st.ListenerAccount)
 	}
 	if !st.KeyExpiresAt.IsZero() {
 		fmt.Fprintf(w, "Key valid until: %s\n", st.KeyExpiresAt.UTC().Format("2006-01-02"))
@@ -87,6 +109,15 @@ func printStatus(w io.Writer, st wire.StatusResponse) {
 	if st.Resume != "" {
 		fmt.Fprintf(w, "Resume: %s; %d runs, %d running\n", st.Resume, st.ResumeRuns, st.ResumeActive)
 	}
+	if st.ResumeHourLimit > 0 {
+		fmt.Fprintf(w, "Hourly limit: %d background runs started in the last hour; the next may start at %s\n",
+			st.ResumeHourLimit, stamp(st.ResumeNextAt))
+	}
+	for _, p := range st.Paused {
+		fmt.Fprintf(w, "Loop ceiling: no more background runs for thread %s after %d; a message from a person in it starts the count again\n",
+			p.Thread, p.Turns)
+	}
+	printChecks(w, st)
 	fmt.Fprintf(w, "Caller checks: %s\n", st.CallerChecks)
 	if len(st.Sessions) == 0 {
 		fmt.Fprintln(w, "Sessions: none")
@@ -124,6 +155,33 @@ func printStatus(w io.Writer, st wire.StatusResponse) {
 		fmt.Fprintf(w, "    %s\n", times)
 		if s.Note != "" {
 			fmt.Fprintf(w, "    %s\n", s.Note)
+		}
+	}
+}
+
+// printChecks shows the message checks (spec 5.16) and the latest messages they stopped.
+func printChecks(w io.Writer, st wire.StatusResponse) {
+	cmd := func(p string) string {
+		if p == "" {
+			return "off"
+		}
+		return p
+	}
+	line := fmt.Sprintf("Checks: secrets scan on; outgoing command %s; incoming command %s", cmd(st.CheckOutgoing), cmd(st.CheckIncoming))
+	if st.CheckWaiting > 0 {
+		line += fmt.Sprintf("; %d waiting for the incoming check", st.CheckWaiting)
+	}
+	fmt.Fprintln(w, line)
+	for _, r := range st.Rejected {
+		switch r.Way {
+		case "outgoing":
+			where := ""
+			if r.Thread != "" {
+				where = " in thread " + r.Thread
+			}
+			fmt.Fprintf(w, "  %s refused a %s by %s%s (not sent): %s\n", stamp(r.At), r.Tool, r.Agent, where, r.Reason)
+		default:
+			fmt.Fprintf(w, "  %s held a message from %s in thread %s for %s: %s\n", stamp(r.At), r.Sender, r.Thread, r.Agent, r.Reason)
 		}
 	}
 }

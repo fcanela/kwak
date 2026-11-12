@@ -271,6 +271,17 @@ func (c *Client) Me(ctx context.Context) (wire.Me, error) {
 	return out, err
 }
 
+// ReportJoin asks the registrar to join userID, one of this pairing's own accounts (an open agent,
+// or the pairing's own listener account, decision 42), to the pairing's report room
+// (POST /report/join), and returns that room's id. A server with no report room for this pairing's
+// kind answers wire.ErrNoReportRoom. The caller posts with userID's own token, then leaves with it
+// (spec 5.17).
+func (c *Client) ReportJoin(ctx context.Context, userID string) (string, error) {
+	var out wire.ReportJoin
+	err := c.authed(ctx, http.MethodPost, wire.PathReportJoin, wire.ReportJoinRequest{UserID: userID}, &out)
+	return out.RoomID, err
+}
+
 // Unpair revokes this pairing (POST /unpair).
 func (c *Client) Unpair(ctx context.Context) error {
 	var out wire.Empty

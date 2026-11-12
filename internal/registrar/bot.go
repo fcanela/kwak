@@ -147,7 +147,9 @@ func (s *Server) lookupCommand(r role, verb string, a []string) (cmdFunc, bool) 
 	case (r.admin || r.owner != "") && verb == "revoke" && len(a) == 1:
 		return func(ctx context.Context, by string) (string, error) { return s.revokeOne(ctx, r, a[0]) }, true
 	case r.owner != "" && verb == "pair" && len(a) == 1:
-		return func(ctx context.Context, by string) (string, error) { return s.bind(ctx, r.owner, a[0]) }, true
+		return func(ctx context.Context, by string) (string, error) { return s.bind(ctx, r.owner, a[0], false) }, true
+	case r.owner != "" && verb == "pair" && is(2, "test"):
+		return func(ctx context.Context, by string) (string, error) { return s.bind(ctx, r.owner, a[1], true) }, true
 	case r.owner != "" && verb == "machines" && len(a) == 0:
 		return func(context.Context, string) (string, error) { return s.cmdMachines(r.owner), nil }, false
 	case r.owner != "" && verb == "agents" && len(a) == 0:
@@ -174,6 +176,7 @@ func helpText(r role) string {
 	}
 	if r.owner != "" {
 		b.WriteString("\npair <CODE>: pair the machine that printed the code" +
+			"\npair test <CODE>: pair it as a test machine: its agents join only the test rooms, never the agents room" +
 			"\nmachines: your paired machines (machine name and OS are what the machine said)" +
 			"\nagents: your open agents" +
 			"\nrevoke <pairing-id> | revoke all: revoke your pairings" +
@@ -273,7 +276,7 @@ func (s *Server) ownerRestore(ctx context.Context, human string) (string, error)
 	return fmt.Sprintf("Restored owner %s (%s). The old pairings stay revoked.", name, human), nil
 }
 
-// ownerRemove revokes every pairing, closes every agent and the standing account (spec 3.5).
+// ownerRemove revokes every pairing, closes every agent and every listener account (spec 3.5).
 func (s *Server) ownerRemove(ctx context.Context, name string) (string, error) {
 	now := s.now()
 	var pairings []string
@@ -364,7 +367,7 @@ func (s *Server) revokeOne(ctx context.Context, r role, id string) (string, erro
 	if err := s.revoke(ctx, id, "revoked"); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Revoked pairing %s. Its key, its listener token and its agents are closed.", id), nil
+	return fmt.Sprintf("Revoked pairing %s. Its key, its listener account and its agents are closed.", id), nil
 }
 
 func (s *Server) revokeAll(ctx context.Context, owner string) (string, error) {
@@ -447,8 +450,17 @@ func (s *Server) cmdMachines(owner string) string {
 			if p.Revoked != nil {
 				state = "revoked " + day(*p.Revoked) + " (" + p.RevokeReason + ")"
 			}
-			lines = append(lines, fmt.Sprintf("%s: %s (%s), created %s, %s, last used %s from %s",
-				id, p.Machine, p.OS, day(p.Created), state, stamp(p.LastUsed), p.LastIP))
+			kind := ""
+			if p.Test {
+				kind = " [test]"
+			}
+			// The pairing's listener account (decision 42), named by its word pair.
+			as := ""
+			if l := pairLabel(p.Listener); l != "" {
+				as = " as " + l
+			}
+			lines = append(lines, fmt.Sprintf("%s%s: %s (%s)%s, created %s, %s, last used %s from %s",
+				id, kind, p.Machine, p.OS, as, day(p.Created), state, stamp(p.LastUsed), p.LastIP))
 		}
 	})
 	if len(lines) == 0 {
@@ -466,6 +478,9 @@ func (s *Server) cmdAgents(owner string) string {
 				m := "?"
 				if p := st.Pairings[a.Pairing]; p != nil {
 					m = p.Machine
+					if p.Test {
+						m += ", test"
+					}
 				}
 				lines = append(lines, fmt.Sprintf("%s (%s): %s, last active %s", a.Pairing, m, lp, stamp(a.LastActive)))
 			}

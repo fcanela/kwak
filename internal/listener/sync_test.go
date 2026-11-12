@@ -247,3 +247,96 @@ func TestAlivePingOnlyActiveInChunks(t *testing.T) {
 		t.Fatal("pinged sessions inactive since the last ping")
 	}
 }
+
+// The cut-over of decision 43 relies on this: when the registrar closes the account a listener
+// syncs on (the old per-owner account, logged out with every device), the sync gets 401
+// M_UNKNOWN_TOKEN (probe F6), and the supervisor calls POST /standing again by itself, which hands
+// it the pairing's own account. The sync goes on from its next_batch, with the new token.
+func TestSupervisorReconnectsAfterALoggedOutToken(t *testing.T) {
+	const legacyTok = "tok-legacy-0002"
+	e := newEnv(t)
+	e.reg.standUser, e.reg.standTok = wiretest.LegacyStanding, legacyTok
+	e.supervise()
+	syncs := func() []string {
+		e.room.mu.Lock()
+		defer e.room.mu.Unlock()
+		return append([]string(nil), e.room.since...)
+	}
+	eventually(t, "first sync", func() bool { return len(syncs()) == 1 && e.reg.standingCalls() == 1 })
+	e.room.syncs <- syncResp("s1", false, "")
+	eventually(t, "second sync", func() bool { return len(syncs()) == 2 })
+
+	// The registrar closes the old account and now answers the pairing's own one.
+	e.reg.mu.Lock()
+	e.reg.standUser, e.reg.standTok = "", ""
+	e.reg.mu.Unlock()
+	e.room.mu.Lock()
+	e.room.revoked[legacyTok] = true
+	e.room.mu.Unlock()
+	e.room.syncs <- syncResult{err: &matrix.Error{Status: 401, Code: matrix.ErrUnknownToken}}
+
+	eventually(t, "standing again", func() bool { return e.reg.standingCalls() == 2 })
+	eventually(t, "sync as the new account", func() bool { return len(syncs()) == 3 })
+	e.l.mu.Lock()
+	user, tok, phase := e.l.standUser, e.l.standing, e.l.phase
+	e.l.mu.Unlock()
+	if user != wiretest.StandingUser || tok != wiretest.StandingToken || phase == wire.StateUnpaired {
+		t.Fatalf("after the reconnect: account %q, token %q, phase %s", user, tok, phase)
+	}
+	if got := syncs(); got[2] != "s1" {
+		t.Fatalf("the new account synced from %q", got[2])
+	}
+	e.waitLog("listener account changed", "from="+wiretest.LegacyStanding, "to="+wiretest.StandingUser)
+}
+
+// When the registrar moves the pairing to its own listener account (decisions 42 and 43: the old
+// per-owner account is logged out, POST /standing answers the new one), the listener keeps its
+// next_batch: a fresh first sync would drop the messages of the gap. A replay of what it already
+// routed, up to last_event_id, reaches no inbox twice.
+func TestListenerAccountSwitchKeepsTheSyncPosition(t *testing.T) {
+	const legacyTok = "tok-legacy-0001"
+	e := newEnv(t)
+	e.reg.standUser, e.reg.standTok = wiretest.LegacyStanding, legacyTok
+	e.connect()
+	uid := e.claudeSession(100, sid1, cwd)
+	old := e.room.client(legacyTok)
+	e.room.syncs <- syncResp("s1", false, "")
+	if err := e.l.syncStep(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	e.room.syncs <- syncResp("s2", false, "", event("$a", bob, e.clk.Now(), text("first", uid)))
+	if err := e.l.syncStep(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+
+	// The old account's token is logged out; the reconnect lands on the pairing's own account.
+	e.room.mu.Lock()
+	e.room.revoked[legacyTok] = true
+	e.room.mu.Unlock()
+	e.reg.mu.Lock()
+	e.reg.standUser, e.reg.standTok = "", ""
+	e.reg.mu.Unlock()
+	e.connect()
+	e.waitLog("listener account changed", "from="+wiretest.LegacyStanding, "to="+wiretest.StandingUser)
+	e.l.mu.Lock()
+	next, user := e.l.st.NextBatch, e.l.standUser
+	e.l.mu.Unlock()
+	if next != "s2" || user != wiretest.StandingUser {
+		t.Fatalf("next_batch %q, account %q", next, user)
+	}
+
+	e.room.syncs <- syncResp("s3", false, "",
+		event("$a", bob, e.clk.Now(), text("first", uid)), event("$b", bob, e.clk.Now(), text("second", uid)))
+	if err := e.step(); err != nil {
+		t.Fatal(err)
+	}
+	e.room.mu.Lock()
+	since := e.room.since[len(e.room.since)-1]
+	e.room.mu.Unlock()
+	if since != "s2" {
+		t.Fatalf("the new account synced from %q", since)
+	}
+	if got := bodiesInOrder(e); len(got) != 2 || !strings.Contains(got[0], "first") || !strings.Contains(got[1], "second") {
+		t.Fatalf("inbox %q", got)
+	}
+}

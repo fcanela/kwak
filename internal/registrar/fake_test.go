@@ -26,9 +26,16 @@ const (
 	testServer = wiretest.ServerName
 	testRoom   = wiretest.RoomID
 	testAlias  = "#agents:" + testServer
-	testAdmin  = "@admin:" + testServer
-	testHS     = "hs-token-for-tests"
-	testIP     = "192.0.2.1"
+	// The side rooms of decisions 39 and 40, set up only by tests that ask (sideRooms).
+	reportAlias     = "#agents-report:" + testServer
+	reportRoom      = wiretest.ReportRoomID
+	testRoomAlias   = "#agents-test:" + testServer
+	testRoomID      = "!t3stR00m"
+	testReportAlias = "#agents-report-test:" + testServer
+	testReportID    = "!t3stR3p0rt"
+	testAdmin       = "@admin:" + testServer
+	testHS          = "hs-token-for-tests"
+	testIP          = "192.0.2.1"
 )
 
 func mx(lp string) string { return "@" + lp + ":" + testServer }
@@ -56,8 +63,10 @@ type fakeUser struct {
 }
 
 type fakeRoom struct {
-	members   map[string]bool
-	encrypted bool
+	members    map[string]bool
+	encrypted  bool
+	inviteOnly bool            // a join needs an invite first (an invite-only side room)
+	invited    map[string]bool // pending invites
 }
 
 type fakeNotice struct{ room, text string }
@@ -172,7 +181,12 @@ func (f *fakeHS) JoinAs(ctx context.Context, uid, room string) error {
 	if r == nil {
 		return mErr(404, matrix.ErrNotFound)
 	}
-	r.members[f.who(uid)] = true
+	who := f.who(uid)
+	if r.inviteOnly && !r.members[who] && !r.invited[who] {
+		return mErr(403, matrix.ErrForbidden)
+	}
+	delete(r.invited, who)
+	r.members[who] = true
 	return nil
 }
 
@@ -236,8 +250,38 @@ func (f *fakeHS) CreateDM(ctx context.Context, human string) (string, error) {
 	return id, nil
 }
 
+// Invite is sent by @registrar, which must be a member of the room (spec 3.11).
 func (f *fakeHS) Invite(ctx context.Context, room, uid string) error {
-	return f.enter("Invite", uid)
+	if err := f.enter("Invite", uid); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.rooms[room]
+	if r == nil || !r.members[mx("registrar")] {
+		return mErr(403, matrix.ErrForbidden)
+	}
+	if r.invited == nil {
+		r.invited = map[string]bool{}
+	}
+	r.invited[uid] = true
+	return nil
+}
+
+// addRoom makes a room with an alias, as the owner does for each side room.
+func (f *fakeHS) addRoom(alias, id string, inviteOnly bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rooms[id] = &fakeRoom{members: map[string]bool{}, inviteOnly: inviteOnly}
+	f.aliases[alias] = id
+}
+
+// invitedTo reports whether uid has a pending invite to room.
+func (f *fakeHS) invitedTo(room, uid string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.rooms[room]
+	return r != nil && r.invited[uid]
 }
 
 func (f *fakeHS) RoomInfo(ctx context.Context, room string) (int, bool, error) {
@@ -426,6 +470,31 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
+// sideRooms configures the three side rooms and creates them at the fake, as the owner does by
+// hand, then lets the registrar join them. reportInviteOnly makes the report room invite-only and
+// invites @registrar to it, as the owner does for a private report room.
+func (f *fixture) sideRooms(reportInviteOnly bool) {
+	f.t.Helper()
+	f.s.Cfg.ReportRoom, f.s.Cfg.TestRoom, f.s.Cfg.TestReportRoom = reportAlias, testRoomAlias, testReportAlias
+	f.hs.addRoom(reportAlias, reportRoom, reportInviteOnly)
+	f.hs.addRoom(testRoomAlias, testRoomID, false)
+	f.hs.addRoom(testReportAlias, testReportID, false)
+	if reportInviteOnly {
+		f.hs.mu.Lock()
+		f.hs.rooms[reportRoom].invited = map[string]bool{mx("registrar"): true}
+		f.hs.mu.Unlock()
+	}
+	f.s.smu.Lock()
+	f.s.initSide()
+	f.s.smu.Unlock()
+	f.s.joinSideRooms(f.t.Context(), true)
+	for _, id := range []string{reportRoom, testRoomID, testReportID} {
+		if !f.hs.member(id, mx("registrar")) {
+			f.t.Fatalf("@registrar did not join %s", id)
+		}
+	}
+}
+
 // reopen builds a new Server over a fresh OpenStore of the same file, as after a restart.
 func (f *fixture) reopen() {
 	f.t.Helper()
@@ -552,14 +621,35 @@ type paired struct {
 	key, id, code string
 }
 
+// listenerLP is the localpart of pairing id's listener account (decision 42), as state.json has it.
+func (f *fixture) listenerLP(id string) string {
+	f.t.Helper()
+	p := f.state().Pairings[id]
+	if p == nil || p.Listener == "" {
+		f.t.Fatalf("pairing %s has no listener account name", id)
+	}
+	return p.Listener
+}
+
+// listenerUID is the user id of pairing id's listener account.
+func (f *fixture) listenerUID(id string) string { return mx(f.listenerLP(id)) }
+
 // pair runs POST /pair, `pair <code>` in the owner's DM and the claim. confirm also calls /standing.
 func (f *fixture) pair(owner, oldKey string, confirm bool) paired {
+	f.t.Helper()
+	p, _, _ := f.pairWith(owner, oldKey, "pair", confirm)
+	return p
+}
+
+// pairWith is pair with the bot command given: "pair", or "pair test" for a test pairing (decision
+// 40). It also returns the bot's reply and the claim response.
+func (f *fixture) pairWith(owner, oldKey, command string, confirm bool) (paired, string, wire.ClaimResponse) {
 	f.t.Helper()
 	var pr wire.PairResponse
 	if c := f.callJSON("POST", wire.PathPair, oldKey, wire.PairRequest{Machine: "laptop", OS: "linux", Version: wire.Version}, &pr); c != 201 {
 		f.t.Fatalf("pair: %d", c)
 	}
-	out := f.say(mx(owner), f.dm(mx(owner)), "pair "+pr.Code)
+	out := f.say(mx(owner), f.dm(mx(owner)), command+" "+pr.Code)
 	if len(out) != 1 || !strings.HasPrefix(out[0], "Paired machine") {
 		f.t.Fatalf("pair reply: %q", out)
 	}
@@ -573,7 +663,7 @@ func (f *fixture) pair(owner, oldKey string, confirm bool) paired {
 			f.t.Fatalf("standing: %d", c)
 		}
 	}
-	return paired{key: cr.OwnerKey, id: cr.PairingID, code: pr.Code}
+	return paired{key: cr.OwnerKey, id: cr.PairingID, code: pr.Code}, out[0], cr
 }
 
 func (f *fixture) agent(key string, h wire.Harness, session, helper string) (int, wire.Agent, wire.APIError) {

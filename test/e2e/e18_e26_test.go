@@ -36,7 +36,6 @@ import (
 	"github.com/fcanela/kwak/internal/proc/osproc"
 	"github.com/fcanela/kwak/internal/registrar"
 	"github.com/fcanela/kwak/internal/render"
-	"github.com/fcanela/kwak/internal/secrets"
 	"github.com/fcanela/kwak/internal/secrets/secretstest"
 	"github.com/fcanela/kwak/internal/wire"
 )
@@ -129,7 +128,8 @@ func e18(t *testing.T, w *World, b *FakeHarness) {
 	before := o.Clock.Now()
 	out := e0.Hook(t, wire.EventSessionStart, map[string]any{"source": "resume"})
 	after := o.Clock.Now()
-	body := "2 messages for you were handed to session " + win.SessionID + " in this directory on " + before.UTC().Format("2006-01-02") + "."
+	body := "2 messages for you were handed to session " + win.SessionID + " in this directory on " + before.UTC().Format("2006-01-02") +
+		" (threads " + m1 + ", " + m2 + "). Read them with the kwak thread tool."
 	match := false
 	for _, at := range []time.Time{before, after} {
 		want := ContextJSON("SessionStart", Rendered(e0ID, wire.HarnessClaude, render.Item{SentAt: at, Reason: render.Notice, Body: body}))
@@ -1013,7 +1013,7 @@ func e2xStartChild(t *testing.T, w *World, o *Owner, cert []byte) *e2xChild {
 	}()
 	w.top.Cleanup(c.kill)
 	b, _ := json.Marshal(e2xChildConf{Config: o.ConfigPath(), State: o.StateDir, Socket: o.Socket,
-		KeyName: secrets.OwnerKeyName(Server), Key: o.Key(), Cert: cert})
+		KeyName: o.KeyName(), Key: o.Key(), Cert: cert})
 	if _, err := in.Write(append(b, '\n')); err != nil {
 		t.Fatalf("write to the child listener: %v", err)
 	}

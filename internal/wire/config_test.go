@@ -31,8 +31,18 @@ func TestMachineConfigJSON(t *testing.T) {
 
 func TestParseMachineConfig(t *testing.T) {
 	c, err := ParseMachineConfig([]byte(`{"version":0,"server":"https://kwak.test","server_name":"kwak.test"}`), false)
-	if err != nil || c.Version != ConfigVersion || c.ResumeMax != DefaultResumeMax {
+	if err != nil || c.Version != ConfigVersion || c.ResumeMax != DefaultResumeMax || DefaultResumeMax != 10 {
 		t.Fatalf("%+v %v", c, err)
+	}
+	if c.ThreadCeiling != 0 || DefaultThreadCeiling != 50 {
+		t.Fatalf("a missing thread_ceiling was filled in (%d) or the default changed", c.ThreadCeiling)
+	}
+	if c.ResumePerHour != 0 || DefaultResumePerHour != 300 {
+		t.Fatalf("a missing resume_per_hour was filled in (%d) or the default changed", c.ResumePerHour)
+	}
+	c, err = ParseMachineConfig([]byte(`{"version":1,"server":"https://kwak.test","thread_ceiling":7,"resume_per_hour":40}`), false)
+	if err != nil || c.ThreadCeiling != 7 || c.ResumePerHour != 40 {
+		t.Fatalf("thread_ceiling, resume_per_hour: %+v %v", c, err)
 	}
 	if _, err := ParseMachineConfig([]byte(`{"version":2,"server":"https://kwak.test"}`), false); !errors.Is(err, ErrConfigNewer) {
 		t.Fatalf("newer: %v", err)
@@ -45,5 +55,31 @@ func TestParseMachineConfig(t *testing.T) {
 	}
 	if _, err := ParseMachineConfig([]byte(`{`), false); err == nil {
 		t.Fatal("bad JSON accepted")
+	}
+}
+
+// keyring_user and test are additive: a config.json from an older kwak has neither, keeps its
+// shape on a save, and reads its key from the old shared keyring name (decision 40).
+func TestMachineConfigKeyringAndTest(t *testing.T) {
+	old, err := ParseMachineConfig([]byte(`{"version":1,"server":"https://kwak.test","server_name":"kwak.test","pairing_id":"3f9a1c2e"}`), false)
+	if err != nil || old.KeyringUser != "" || old.Test {
+		t.Fatalf("old config: %+v %v", old, err)
+	}
+	if got := old.KeyName(); got != "kwak.test/owner-key" {
+		t.Fatalf("old config KeyName = %q", got)
+	}
+	out, _ := json.Marshal(old)
+	var m map[string]any
+	json.Unmarshal(out, &m)
+	if _, ok := m["keyring_user"]; ok {
+		t.Fatalf("an old config gained keyring_user: %s", out)
+	}
+	if _, ok := m["test"]; ok {
+		t.Fatalf("an old config gained test: %s", out)
+	}
+	c, err := ParseMachineConfig([]byte(`{"version":1,"server":"https://kwak.test","server_name":"kwak.test",`+
+		`"pairing_id":"3f9a1c2e","keyring_user":"kwak.test/3f9a1c2e/owner-key","test":true}`), false)
+	if err != nil || !c.Test || c.KeyName() != "kwak.test/3f9a1c2e/owner-key" {
+		t.Fatalf("new config: %+v %q %v", c, c.KeyName(), err)
 	}
 }

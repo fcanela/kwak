@@ -191,13 +191,27 @@ func DMBody(human string) map[string]any {
 }
 
 // RoomBody is the createRoom body of the agents room (spec 3.11). bot is the @registrar user id.
-func RoomBody(bot string) map[string]any {
-	return map[string]any{
+func RoomBody(bot string) map[string]any { return RoomBodyFor(bot, "agents", false) }
+
+// RoomBodyFor is RoomBody for any kwak room: the agents room or a side room such as
+// agents-report, agents-test or agents-report-test (decisions 39 and 40). alias is the alias
+// localpart, also used as the name. inviteOnly makes the join rule invite and invites @registrar
+// at once, so it can join and invite agents (spec 3.11). No room ever gets guest access.
+func RoomBodyFor(bot, alias string, inviteOnly bool) map[string]any {
+	topic := "kwak room " + alias + "."
+	if alias == "agents" {
+		topic = "kwak agents room. A thread's first message is a question; replies in it are answers."
+	}
+	state := []any{map[string]any{
+		"type": "m.room.history_visibility", "state_key": "",
+		"content": map[string]any{"history_visibility": "shared"},
+	}}
+	body := map[string]any{
 		"preset":          "public_chat",
 		"visibility":      "private",
-		"name":            "agents",
-		"room_alias_name": "agents",
-		"topic":           "kwak agents room. A thread's first message is a question; replies in it are answers.",
+		"name":            alias,
+		"room_alias_name": alias,
+		"topic":           topic,
 		"power_level_content_override": map[string]any{
 			"users":          map[string]any{bot: 50},
 			"users_default":  0,
@@ -218,9 +232,13 @@ func RoomBody(bot string) map[string]any {
 				"m.room.tombstone":          100,
 			},
 		},
-		"initial_state": []any{map[string]any{
-			"type": "m.room.history_visibility", "state_key": "",
-			"content": map[string]any{"history_visibility": "shared"},
-		}},
+		"initial_state": state,
 	}
+	if inviteOnly {
+		body["initial_state"] = append(state, map[string]any{
+			"type": "m.room.join_rules", "state_key": "", "content": map[string]any{"join_rule": "invite"},
+		})
+		body["invite"] = []string{bot}
+	}
+	return body
 }

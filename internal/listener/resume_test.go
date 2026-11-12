@@ -48,16 +48,12 @@ func TestResumeArgvAndLog(t *testing.T) {
 		t.Fatalf("%d runs after the debounce", e.runner.count())
 	}
 	r := e.runner.runs[0]
-	want := []string{"/opt/bin/claude", "-p", resumePrompt, "--resume", sid1, "--tools", "",
-		"--allowedTools", "mcp__plugin_kwak_kwak__send,mcp__plugin_kwak_kwak__reply,mcp__plugin_kwak_kwak__thread"}
+	want := resumeArgv("/opt/bin/claude", sid1, resumeStrictMCP)
 	if strings.Join(r.argv, "\x00") != strings.Join(want, "\x00") || r.dir != dir {
 		t.Fatalf("argv %q in %s", r.argv, r.dir)
 	}
-	variadic := map[string]bool{"--tools": true, "--allowedTools": true}
-	for i, a := range r.argv {
-		if variadic[a] && i+2 < len(r.argv) && !strings.HasPrefix(r.argv[i+2], "--") {
-			t.Fatalf("argument %q follows the list of %s", r.argv[i+2], a)
-		}
+	checkResumeArgv(t, r.argv)
+	for _, a := range r.argv {
 		if strings.Contains(a, "rm -rf") || strings.Contains(a, "more") {
 			t.Fatal("message text in argv")
 		}
@@ -77,6 +73,44 @@ func TestResumeArgvAndLog(t *testing.T) {
 	}
 	r.done <- nil
 	eventually(t, "the run to end", func() bool { return e.l.status(&client{pidOK: true}).ResumeActive == 0 })
+}
+
+// checkResumeArgv checks the shape rules of 5.11: the prompt right after -p, a value after each
+// variadic flag and then another flag, and dontAsk as the permission mode.
+func checkResumeArgv(t *testing.T, argv []string) {
+	t.Helper()
+	if argv[1] != "-p" || argv[2] != resumePrompt {
+		t.Fatalf("the prompt is not right after -p: %q", argv)
+	}
+	variadic := map[string]bool{"--tools": true, "--allowedTools": true, "--mcp-config": true}
+	for i, a := range argv {
+		if variadic[a] && (i+2 >= len(argv) || !strings.HasPrefix(argv[i+2], "--")) {
+			t.Fatalf("no flag follows the list of %s: %q", a, argv)
+		}
+	}
+	if n := len(argv); argv[n-2] != "--permission-mode" || argv[n-1] != "dontAsk" {
+		t.Fatalf("the run is not in dontAsk mode: %q", argv)
+	}
+}
+
+// Both fences of 5.11: strict MCP with a kwak-only server, and the fallback that keeps the
+// plugin's MCP servers and relies on dontAsk alone (resumeStrictMCP false).
+func TestResumeArgvFences(t *testing.T) {
+	for strict, want := range map[bool][]string{
+		true: {"/opt/bin/claude", "-p", resumePrompt, "--resume", sid1, "--tools", "",
+			"--allowedTools", "mcp__kwak__send,mcp__kwak__reply,mcp__kwak__thread",
+			"--strict-mcp-config", "--mcp-config", `{"mcpServers":{"kwak":{"command":"kwak","args":["mcp","--harness","claude"]}}}`,
+			"--permission-mode", "dontAsk"},
+		false: {"/opt/bin/claude", "-p", resumePrompt, "--resume", sid1, "--tools", "",
+			"--allowedTools", "mcp__plugin_kwak_kwak__send,mcp__plugin_kwak_kwak__reply,mcp__plugin_kwak_kwak__thread",
+			"--permission-mode", "dontAsk"},
+	} {
+		argv := resumeArgv("/opt/bin/claude", sid1, strict)
+		if strings.Join(argv, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("strict %v: argv %q", strict, argv)
+		}
+		checkResumeArgv(t, argv)
+	}
 }
 
 func TestResumeMaxPerMachine(t *testing.T) {
@@ -225,5 +259,147 @@ func TestI1NoSecrets(t *testing.T) {
 		if strings.Contains(string(data), s) {
 			t.Errorf("state.json holds %q", s)
 		}
+	}
+}
+
+func perHourOpt(n int) opt {
+	return func(e *env, _ *Config) {
+		c := machineConf()
+		c.ResumeMax, c.ResumePerHour = 5, n
+		writeConf(e.t, e.confPath, c)
+	}
+}
+
+// The hourly limit of decision 38 counts run starts on this machine in a rolling hour. A run over
+// it waits like a run with no free slot, also once the earlier runs have ended, and starts when
+// the hour allows it. The log says so once, and kwak status shows the limit while it holds.
+func TestResumePerHourLimit(t *testing.T) {
+	e := newEnv(t, perHourOpt(2))
+	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.connect()
+	t0 := e.clk.Now()
+	for i, sid := range []string{sid1, sid2, sid3} {
+		root := "$root" + sid[:4]
+		e.endedClaude(100*(i+1), sid, t.TempDir(), root)
+		e.deliver(event("$re"+sid[:4], bob, e.clk.Now(), inThread(text("x"), root)))
+	}
+	e.clk.Advance(resumeDelay)
+	e.l.deadlines()
+	if e.runner.count() != 2 {
+		t.Fatalf("%d runs, the hourly limit is 2", e.runner.count())
+	}
+	e.waitLog("background resume waiting: hourly limit", "limit=2", "count=2")
+	st := e.l.status(&client{pidOK: true})
+	if next := t0.Add(resumeDelay + time.Hour).UTC(); st.ResumeHourLimit != 2 || !st.ResumeNextAt.Equal(next) {
+		t.Fatalf("status limit %d, next %v, want %v", st.ResumeHourLimit, st.ResumeNextAt, next)
+	}
+	for i := 0; i < 2; i++ {
+		e.runner.mu.Lock()
+		r := e.runner.runs[i]
+		e.runner.mu.Unlock()
+		r.done <- nil
+	}
+	eventually(t, "both runs to end", func() bool { return e.l.status(&client{pidOK: true}).ResumeActive == 0 })
+	for i := 0; i < 5; i++ {
+		e.clk.Advance(deadlineEvery)
+		e.l.deadlines()
+	}
+	if e.runner.count() != 2 {
+		t.Fatalf("a run started over the hourly limit with free slots: %d runs", e.runner.count())
+	}
+	if n := strings.Count(e.logs.String(), "background resume waiting: hourly limit"); n != 1 {
+		t.Fatalf("the hourly limit was logged %d times", n)
+	}
+	e.clk.Advance(t0.Add(resumeDelay + time.Hour).Sub(e.clk.Now()))
+	e.l.deadlines()
+	if e.runner.count() != 3 {
+		t.Fatalf("the waiting run did not start when the hour allowed it: %d runs", e.runner.count())
+	}
+	if st := e.l.status(&client{pidOK: true}); st.ResumeHourLimit != 0 || !st.ResumeNextAt.IsZero() {
+		t.Fatalf("status still shows the limit: %+v", st)
+	}
+}
+
+// The hourly limit is logged again once a run has started since (5.11): fill the limit, let the
+// hour pass so the waiting run starts, then fill it again.
+func TestResumePerHourLogsAgainAfterARun(t *testing.T) {
+	e := newEnv(t, perHourOpt(2))
+	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.connect()
+	t0 := e.clk.Now()
+	sids := []string{sid1, sid2, sid3}
+	for i, sid := range sids {
+		root := "$root" + sid[:4]
+		e.endedClaude(100*(i+1), sid, t.TempDir(), root)
+		e.deliver(event("$re"+sid[:4], bob, e.clk.Now(), inThread(text("x"), root)))
+	}
+	e.clk.Advance(resumeDelay)
+	e.l.deadlines()
+	e.waitLog("background resume waiting: hourly limit", "limit=2", "count=2")
+	e.clk.Advance(t0.Add(resumeDelay + time.Hour).Sub(e.clk.Now()))
+	e.l.deadlines()
+	if e.runner.count() != 3 {
+		t.Fatalf("the waiting run did not start when the hour allowed it: %d runs", e.runner.count())
+	}
+	for i := 0; i < 3; i++ {
+		e.runner.mu.Lock()
+		r := e.runner.runs[i]
+		e.runner.mu.Unlock()
+		r.done <- nil
+	}
+	eventually(t, "the runs to end", func() bool { return e.l.status(&client{pidOK: true}).ResumeActive == 0 })
+	for _, sid := range sids[:2] {
+		e.deliver(event("$again"+sid[:4], bob, e.clk.Now(), inThread(text("y"), "$root"+sid[:4])))
+	}
+	e.clk.Advance(resumeDelay)
+	e.l.deadlines()
+	if e.runner.count() != 4 {
+		t.Fatalf("%d runs; one more fits in the hour", e.runner.count())
+	}
+	eventually(t, "the second hourly limit line", func() bool {
+		return strings.Count(e.logs.String(), "background resume waiting: hourly limit") == 2
+	})
+}
+
+// After a reload lowers resume_per_hour under the runs already started this hour, kwak status
+// gives the time when enough of them are an hour old to bring the count under the new limit.
+func TestResumePerHourLoweredByReload(t *testing.T) {
+	e := newEnv(t, perHourOpt(5))
+	e.reg.me.Settings.Resume = wire.ResumeReplies
+	e.connect()
+	var starts []time.Time
+	for i, sid := range []string{sid1, sid2, sid3} {
+		root := "$root" + sid[:4]
+		e.endedClaude(100*(i+1), sid, t.TempDir(), root)
+		e.deliver(event("$re"+sid[:4], bob, e.clk.Now(), inThread(text("x"), root)))
+		e.clk.Advance(resumeDelay)
+		e.l.deadlines()
+		if e.runner.count() != i+1 {
+			t.Fatalf("%d runs, want %d", e.runner.count(), i+1)
+		}
+		starts = append(starts, e.clk.Now())
+		e.clk.Advance(time.Minute)
+	}
+	c := machineConf()
+	c.ResumeMax, c.ResumePerHour = 5, 2
+	writeConf(t, e.confPath, c)
+	e.connect()
+	// Three starts and a limit of 2: the count falls under the limit when the second start is an
+	// hour old, not the first.
+	st := e.l.status(&client{pidOK: true})
+	if next := starts[1].Add(time.Hour).UTC(); st.ResumeHourLimit != 2 || !st.ResumeNextAt.Equal(next) {
+		t.Fatalf("status limit %d, next %v, want %v", st.ResumeHourLimit, st.ResumeNextAt, next)
+	}
+}
+
+// Without resume_per_hour in config.json the limit is 300 (decision 38).
+func TestResumePerHourDefault(t *testing.T) {
+	e := newEnv(t)
+	if got := e.l.resumePerHour(); got != 300 {
+		t.Fatalf("limit %d", got)
+	}
+	e = newEnv(t, perHourOpt(7))
+	if got := e.l.resumePerHour(); got != 7 {
+		t.Fatalf("limit %d", got)
 	}
 }

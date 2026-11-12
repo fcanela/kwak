@@ -32,6 +32,9 @@ func TestMem(t *testing.T) {
 	if s.Sets() != 2 {
 		t.Fatalf("Sets = %d", s.Sets())
 	}
+	if items := s.Items(); len(items) != 1 || items[0] != key {
+		t.Fatalf("Items = %v", items)
+	}
 
 	s.Fail(secrets.ErrTimeout)
 	if _, err := s.Get(key); !errors.Is(err, secrets.ErrTimeout) {

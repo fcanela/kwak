@@ -173,7 +173,7 @@ func TestScannerFindsRealShapes(t *testing.T) {
 	}
 	clean := []string{
 		`"as_token": "<as_token: 64 hex, random, written by gen-registration>"`,
-		"nftables_container_egress_deny_interfaces: [wg0, tailscale0]",
+		"egress_deny_interfaces: [eth1, wg0]",
 		`proxy_pass http://192.0.2.12:8010;`,
 		`if ($args ~* "(^|&)access_token=") { return 400; }`,
 		"the refusal of `?access_token=` stays",
@@ -309,7 +309,8 @@ func TestConfigExample(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"idle_after", "close_grace", "key_lifetime", "key_warn_before",
-		"pairing_ttl", "unconfirmed_ttl", "prune_closed_after", "jobs_every"} {
+		"pairing_ttl", "unconfirmed_ttl", "prune_closed_after", "jobs_every",
+		"report_room", "test_room", "test_report_room"} {
 		if _, ok := raw[k]; !ok {
 			t.Errorf("config.example.json does not show %s", k)
 		}
@@ -326,6 +327,10 @@ func TestConfigExample(t *testing.T) {
 	}
 	if len(c.Admins) == 0 {
 		t.Error("no admins")
+	}
+	// The side rooms of decisions 39 and 40: optional, and the -test suffix names the test ones.
+	if c.ReportRoom == "" || !strings.HasPrefix(c.TestRoom, "#agents-test:") || !strings.HasPrefix(c.TestReportRoom, "#agents-report-test:") {
+		t.Errorf("side rooms %q %q %q", c.ReportRoom, c.TestRoom, c.TestReportRoom)
 	}
 }
 

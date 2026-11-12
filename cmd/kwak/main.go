@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fcanela/kwak/internal/check"
 	"github.com/fcanela/kwak/internal/cli"
 	"github.com/fcanela/kwak/internal/hook"
 	"github.com/fcanela/kwak/internal/ipc"
@@ -56,6 +57,9 @@ type sys struct {
 	Detach     func(exe string) error
 	Supervise  func(ctx context.Context, exe, logPath string) int
 	Listen     func(cli.ListenConfig, listener.Deps) cli.Main
+	// Dev is a dev build (make dev, paths.Dev): its own folders, no user service, a note in
+	// kwak version and kwak status (decision 40).
+	Dev bool
 }
 
 func realSys() sys {
@@ -76,8 +80,30 @@ func realSys() sys {
 		Detach:     service.Detach,
 		Supervise:  service.Supervise,
 		Listen:     cli.Listen,
+		Dev:        paths.Dev(),
 	}
 }
+
+// service is the user service manager. A dev build gets one that refuses everything, so it can
+// never install, start, stop or remove the real listener's service under the real service name.
+func (s sys) service() service.Manager {
+	if s.Dev {
+		return devService{}
+	}
+	return s.Service()
+}
+
+// errDevService is what every service command of a dev build answers.
+var errDevService = errors.New("this is a dev build, and a dev build never touches the kwak user service " +
+	"(it would replace your real listener). Run the dev listener in a terminal: kwak listen (see docs/development.md)")
+
+type devService struct{}
+
+func (devService) Install(string) error    { return errDevService }
+func (devService) Uninstall() error        { return errDevService }
+func (devService) Start() error            { return errDevService }
+func (devService) Stop() error             { return errDevService }
+func (devService) Status() (string, error) { return "", errDevService }
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, realSys()))
@@ -92,12 +118,15 @@ func commands(s sys) map[string]Main {
 	}
 	svc := func(pick func(service.Commands) cli.Main) Main {
 		return func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-			return pick(service.Commands{Manager: s.Service(), Exe: s.Exe})(args, stdin, stdout, stderr)
+			return pick(service.Commands{Manager: s.service(), Exe: s.Exe})(args, stdin, stdout, stderr)
 		}
 	}
 	return map[string]Main{
 		"setup": func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			if len(args) > 0 && wire.ValidHarness(wire.Harness(args[0])) {
+				if s.Dev {
+					return setup.DevMain(args, stdin, stdout, stderr)
+				}
 				return setup.Main(args, stdin, stdout, stderr)
 			}
 			return human(func(c *cli.CLI) cli.Main { return c.Setup })(args, stdin, stdout, stderr)
@@ -111,7 +140,7 @@ func commands(s sys) map[string]Main {
 		"uninstall": svc(func(c service.Commands) cli.Main { return c.Uninstall }),
 		"listen":    s.listen,
 		"doctor": func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-			d := setup.DoctorDeps{Preflight: s.Preflight, Secrets: s.Keyring(), Call: socketCaller()}
+			d := setup.DoctorDeps{Preflight: s.Preflight, Secrets: s.Keyring(), Call: socketCaller(), Dev: s.Dev}
 			return setup.Doctor(d)(args, stdin, stdout, stderr)
 		},
 		"hook": func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -120,7 +149,7 @@ func commands(s sys) map[string]Main {
 		"mcp": func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return mcp.NewMain(s.Procs())(args, stdin, stdout, stderr)
 		},
-		"version": version,
+		"version": s.version,
 	}
 }
 
@@ -157,19 +186,34 @@ func usage(w io.Writer, cmds map[string]Main) {
 	}
 }
 
-func version(args []string, _ io.Reader, stdout, stderr io.Writer) int {
+// version is kwak version. A dev build says so on the same line, then names its folders.
+func (s sys) version(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		fmt.Fprintln(stderr, "usage: kwak version")
 		return 2
 	}
-	fmt.Fprintf(stdout, "kwak %s\n", wire.Version)
+	if !s.Dev {
+		fmt.Fprintf(stdout, "kwak %s\n", wire.Version)
+		return 0
+	}
+	fmt.Fprintf(stdout, "kwak %s (dev build)\n", wire.Version)
+	for _, d := range []struct {
+		name string
+		path func() (string, error)
+	}{{"config", paths.ConfigDir}, {"state", paths.StateDir}, {"socket", paths.SocketPath}} {
+		p, err := d.path()
+		if err != nil {
+			p = err.Error()
+		}
+		fmt.Fprintf(stdout, "  %s: %s\n", d.name, p)
+	}
 	return 0
 }
 
 func (s sys) cliEnv() cli.Env {
 	return cli.Env{
 		Secrets:      s.Keyring(),
-		Service:      s.Service(),
+		Service:      s.service(),
 		Preflight:    s.Preflight,
 		Call:         socketCaller(),
 		PrintHarness: setup.Print,
@@ -177,6 +221,7 @@ func (s sys) cliEnv() cli.Env {
 		HTTP:         s.HTTP(),
 		Server:       os.Getenv(cli.EnvServer),
 		Owner:        os.Getenv(cli.EnvOwner),
+		Dev:          s.Dev,
 	}
 }
 
@@ -247,6 +292,7 @@ func (s sys) listenDeps(stderr io.Writer) (cli.ListenConfig, listener.Deps) {
 		Procs:   s.Procs(),
 		PeerPID: ipc.PeerPID,
 		Runner:  s.Runner,
+		Check:   check.Exec{},
 		Clock:   s.Clock,
 		Log:     slog.New(slog.NewTextHandler(stderr, nil)),
 	}
@@ -270,17 +316,26 @@ type wallClock struct{}
 func (wallClock) Now() time.Time                         { return time.Now() }
 func (wallClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
-// execRunner starts a background resume (spec 5.11). Cancelling ctx kills it.
-type execRunner struct{}
+// execRunner starts a background resume (spec 5.11). Cancelling ctx stops the run and its
+// children: SIGTERM, then SIGKILL after Grace (5 s when zero). wait returns once they are gone.
+type execRunner struct {
+	Grace time.Duration
+}
 
-func (execRunner) Start(ctx context.Context, dir string, argv []string, log io.Writer) (func() error, error) {
+const runGrace = 5 * time.Second
+
+func (r execRunner) Start(ctx context.Context, dir string, argv []string, log io.Writer) (func() error, error) {
 	if len(argv) == 0 {
 		return nil, errors.New("kwak: empty command")
+	}
+	grace := r.Grace
+	if grace <= 0 {
+		grace = runGrace
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Stdout = log
 	cmd.Stderr = log
-	cmd.WaitDelay = 5 * time.Second
-	return startTree(cmd)
+	cmd.WaitDelay = grace
+	return startTree(cmd, grace)
 }

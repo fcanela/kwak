@@ -8,9 +8,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -28,8 +31,12 @@ import (
 	"github.com/fcanela/kwak/internal/wire"
 )
 
-// childEnv makes the test binary act as a background-resume child (TestExecRunner).
-const childEnv = "KWAK_CMD_TEST_CHILD"
+// childEnv makes the test binary act as a background-resume child (TestExecRunner). A "wrapper"
+// starts the test binary again, in the mode named by grandchildEnv, without exec, and waits.
+const (
+	childEnv      = "KWAK_CMD_TEST_CHILD"
+	grandchildEnv = "KWAK_CMD_TEST_GRANDCHILD"
+)
 
 func TestMain(m *testing.M) {
 	switch os.Getenv(childEnv) {
@@ -38,7 +45,21 @@ func TestMain(m *testing.M) {
 		fmt.Println(wd, os.Args[len(os.Args)-1])
 		os.Exit(0)
 	case "sleep":
+		fmt.Println("ready", os.Getpid())
 		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "stubborn":
+		signal.Ignore(syscall.SIGTERM)
+		fmt.Println("ready", os.Getpid())
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "wrapper":
+		cmd := exec.Command(os.Args[0])
+		cmd.Env = append(os.Environ(), childEnv+"="+os.Getenv(grandchildEnv))
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if cmd.Run() != nil {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
@@ -160,7 +181,8 @@ func TestRun(t *testing.T) {
 }
 
 func TestUsageSorted(t *testing.T) {
-	cmds := map[string]Main{"b": version, "a": version, "c": version}
+	v := sys{}.version
+	cmds := map[string]Main{"b": v, "a": v, "c": v}
 	var b bytes.Buffer
 	usage(&b, cmds)
 	want := "usage: kwak <command> [args]\ncommands:\n  a\n  b\n  c\n"
@@ -522,5 +544,35 @@ func TestPTYPipeNames(t *testing.T) {
 		if got := isPTYPipeName(name); got != want {
 			t.Errorf("isPTYPipeName(%q) = %v", name, got)
 		}
+	}
+}
+
+// A dev build (make dev) says so in kwak version, and never touches the user service: install,
+// uninstall and bare setup refuse, and no service manager is even built (decision 40).
+func TestDevBuild(t *testing.T) {
+	r := newRig(t)
+	r.Dev = true
+	code, out, _ := r.run("", "version")
+	if code != 0 || !strings.HasPrefix(out, "kwak "+wire.Version+" (dev build)\n") ||
+		!strings.Contains(out, "  config: "+os.Getenv(paths.EnvConfigDir)+"\n") || !strings.Contains(out, "  socket: ") {
+		t.Fatalf("version: exit %d:\n%s", code, out)
+	}
+	for _, args := range [][]string{{"install"}, {"uninstall"}} {
+		code, _, errs := r.run("", args...)
+		if code != 1 || !strings.Contains(errs, "a dev build never touches the kwak user service") {
+			t.Errorf("%v: exit %d: %s", args, code, errs)
+		}
+	}
+	if code, _, errs := r.run("", "setup", "--owner", "fcanela"); code != 1 || !strings.Contains(errs, "bare kwak setup installs the user service") {
+		t.Errorf("bare setup: exit %d: %s", code, errs)
+	}
+	if r.built["service"] != 0 || len(r.rec.Calls()) != 0 {
+		t.Errorf("a dev build built a service manager (%d) or ran %v", r.built["service"], r.rec.Calls())
+	}
+
+	// A release build still installs.
+	r = newRig(t)
+	if code, out, errs := r.run("", "install"); code != 0 || !strings.Contains(out, "runs as a user service") {
+		t.Fatalf("release install: exit %d: %s %s", code, out, errs)
 	}
 }

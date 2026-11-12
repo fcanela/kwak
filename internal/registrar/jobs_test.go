@@ -25,8 +25,8 @@ func TestIdleCloseExemptsStanding(t *testing.T) {
 	if r := st.Agents[codexLP]; r.Closed != nil {
 		t.Fatalf("an agent alive 5 days ago was closed: %+v", r)
 	}
-	if r := st.Agents["agent.fcanela.listener"]; r.Closed != nil || f.hs.live(mx("agent.fcanela.listener")) == nil {
-		t.Fatal("standing account closed by the idle job")
+	if lp := f.listenerLP(p.id); st.Agents[lp].Closed != nil || f.hs.live(mx(lp)) == nil {
+		t.Fatal("listener account closed by the idle job")
 	}
 }
 
@@ -131,7 +131,7 @@ func TestOwnerRemoval(t *testing.T) {
 	if st.Owners["fcanela"].Removed == nil || st.Pairings[p.id].Revoked == nil {
 		t.Fatal("owner or pairing left")
 	}
-	for _, uid := range []string{a.UserID, mx("agent.fcanela.listener")} {
+	for _, uid := range []string{a.UserID, f.listenerUID(p.id)} {
 		if f.hs.live(uid) != nil || f.hs.member(testRoom, uid) {
 			t.Errorf("%s still live", uid)
 		}
@@ -144,16 +144,21 @@ func TestOwnerRemoval(t *testing.T) {
 	if code != 403 || !strings.Contains(string(body), wire.ErrOwnerRemoved) {
 		t.Fatalf("removed owner's key: %d %s %v", code, body, e)
 	}
-	// Restored: the standing account comes back at the next pairing.
+	if r := st.Agents[f.listenerLP(p.id)]; r == nil || r.Closed == nil || r.CloseReason != "revoked" {
+		t.Fatalf("listener account record after owner remove: %+v", r)
+	}
+	// Restored: the next pairing gets a new listener account; the old one stays closed.
 	f.say(testAdmin, f.dm(testAdmin), "owner add --restore "+mx("fcanela"))
 	np := f.pair("fcanela", "", true)
 	if c := f.callJSON("GET", wire.PathMe, p.key, nil, nil); c != 401 {
 		t.Errorf("old pairing after restore: %d", c)
 	}
-	if !f.hs.member(testRoom, mx("agent.fcanela.listener")) || f.state().Agents["agent.fcanela.listener"].Closed != nil {
-		t.Error("standing account not reopened")
+	if lp := f.listenerLP(np.id); lp == f.listenerLP(p.id) || !f.hs.member(testRoom, mx(lp)) || f.state().Agents[lp].Closed != nil {
+		t.Error("no new listener account after the restore")
 	}
-	_ = np
+	if f.hs.member(testRoom, f.listenerUID(p.id)) {
+		t.Error("the old listener account came back")
+	}
 }
 
 func TestCleanupRetries(t *testing.T) {

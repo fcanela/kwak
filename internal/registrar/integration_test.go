@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -103,14 +104,16 @@ func TestRegistrarAgainstTuwunel(t *testing.T) {
 	if c := callAPI(t, api.URL, "POST", wire.PathPairClaim, pr.Claim, struct{}{}, &cr); c != 200 || cr.Status != wire.ClaimPaired {
 		t.Fatalf("claim: %d %+v", c, cr)
 	}
-	if cr.Owner != "alice" || cr.RoomID != room || cr.StandingUser != "@agent.alice.listener:"+server {
+	// The pairing's own listener account (decision 42): agent.alice.<adjective>-<animal>.listener.
+	m := regexp.MustCompile(`^@agent\.alice\.([a-z]+-[a-z]+)\.listener:`).FindStringSubmatch(cr.StandingUser)
+	if cr.Owner != "alice" || cr.RoomID != room || m == nil {
 		t.Fatalf("claim %+v", cr)
 	}
-	waitNotice(t, alice, aliceDM, "Paired machine 'it-box' (linux) as pairing "+cr.PairingID+", asked from 203.0.113.5")
+	waitNotice(t, alice, aliceDM, "Paired machine 'it-box' (linux) as "+m[1]+" (pairing "+cr.PairingID+"), asked from 203.0.113.5")
 
 	var sr wire.Standing
-	if c := callAPI(t, api.URL, "POST", wire.PathStanding, cr.OwnerKey, struct{}{}, &sr); c != 200 {
-		t.Fatalf("standing: %d", c)
+	if c := callAPI(t, api.URL, "POST", wire.PathStanding, cr.OwnerKey, struct{}{}, &sr); c != 200 || sr.UserID != cr.StandingUser {
+		t.Fatalf("standing: %d %+v", c, sr)
 	}
 	members, err := env.Client(sr.AccessToken).JoinedMembers(ctx, room)
 	if err != nil || !slices.Contains(members, sr.UserID) {
@@ -178,6 +181,49 @@ func TestRegistrarAgainstTuwunel(t *testing.T) {
 		})
 		return "", ok
 	})
+
+	// The cut-over of decision 43: an open per-owner standing account of a build before decision
+	// 42, with a listener syncing on it, is closed by the next job pass. Its sync token dies with
+	// M_UNKNOWN_TOKEN (what makes a listener call POST /standing again), it leaves the room, and
+	// POST /standing answers the pairing's own account.
+	const legacyLP = "agent.alice.listener"
+	legacyUID := "@" + legacyLP + ":" + server
+	ll, err := env.AppserviceClient().RegisterAppservice(ctx, legacyLP, "KWAK-"+cr.PairingID)
+	if err != nil {
+		t.Fatalf("register the old account: %v", err)
+	}
+	if _, err := env.AppserviceClient().As(legacyUID).Join(ctx, room); err != nil {
+		t.Fatalf("the old account joins: %v", err)
+	}
+	legacy := env.Client(ll.AccessToken)
+	if _, err := legacy.Sync(ctx, "", "", 0); err != nil {
+		t.Fatalf("the old account syncs: %v", err)
+	}
+	if err := store.Update(func(st *registrar.State) error {
+		now := time.Now().UTC()
+		st.Agents[legacyLP] = &registrar.Agent{Owner: "alice", Kind: wire.KindStanding, Created: now, LastActive: now}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the job pass closes the old account", func() (string, bool) {
+		var done bool
+		store.View(func(st *registrar.State) {
+			a := st.Agents[legacyLP]
+			done = a.Closed != nil && a.CleanupDone && a.CloseReason == "retired"
+		})
+		return "", done
+	})
+	if _, err := legacy.Sync(ctx, "", "", 0); !matrix.IsCode(err, matrix.ErrUnknownToken) {
+		t.Fatalf("the old account's sync after the close: %v", err)
+	}
+	if members, _ := admin.JoinedMembers(ctx, room); slices.Contains(members, legacyUID) || !slices.Contains(members, sr.UserID) {
+		t.Fatalf("members after the cut-over: %v", members)
+	}
+	var again wire.Standing
+	if c := callAPI(t, api.URL, "POST", wire.PathStanding, cr.OwnerKey, struct{}{}, &again); c != 200 || again.UserID != sr.UserID {
+		t.Fatalf("standing after the cut-over: %d %+v", c, again)
+	}
 }
 
 func waitFor(t *testing.T, what string, f func() (string, bool)) string {

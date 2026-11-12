@@ -1,6 +1,7 @@
 package listener
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -96,15 +98,22 @@ type fakeReg struct {
 	agentErr  func(wire.AgentRequest) error
 	standErr  error
 	standings int
+	standUser string // the account Standing answers; "" is wiretest.StandingUser
+	standTok  string // its token; "" is wiretest.StandingToken
 	gate      chan struct{}
 	closeGate chan struct{} // Close waits on it, after counting the call in closing
 	closing   int
 	onAlive   func() // runs inside Alive, without the lock
 	me        wire.Me
+	user      map[string]string // token -> the agent it was minted for
+
+	reportRoom  string                    // the report room ReportJoin answers; "" answers KWAK_NO_REPORT_ROOM
+	reportErr   func(userID string) error // an error for ReportJoin, before the room
+	reportJoins []string                  // the accounts ReportJoin was asked to join
 }
 
 func newReg() *fakeReg {
-	return &fakeReg{keys: map[string]bool{wiretest.OwnerKey: true}, closed: map[string]bool{},
+	return &fakeReg{keys: map[string]bool{wiretest.OwnerKey: true}, closed: map[string]bool{}, user: map[string]string{},
 		me: wire.Me{Owner: wiretest.Owner, PairingID: wiretest.PairingID, Machine: wiretest.Machine,
 			KeyExpiresAt: at("2027-01-31T10:05:00Z"), Settings: wire.Settings{Resume: "off", QuestionTimeout: "15m"}}}
 }
@@ -132,7 +141,8 @@ func (f *fakeReg) Standing(context.Context) (wire.Standing, error) {
 	if f.standErr != nil {
 		return wire.Standing{}, f.standErr
 	}
-	return wire.Standing{UserID: wiretest.StandingUser, AccessToken: wiretest.StandingToken, DeviceID: "KWAK-" + wiretest.PairingID}, nil
+	user, tok := cmp.Or(f.standUser, wiretest.StandingUser), cmp.Or(f.standTok, wiretest.StandingToken)
+	return wire.Standing{UserID: user, AccessToken: tok, DeviceID: "KWAK-" + wiretest.PairingID}, nil
 }
 
 func (f *fakeReg) Agent(ctx context.Context, r wire.AgentRequest) (wire.Agent, error) {
@@ -168,7 +178,9 @@ func (f *fakeReg) Agent(ctx context.Context, r wire.AgentRequest) (wire.Agent, e
 	f.agentN++
 	tok := fmt.Sprintf("tok-agent-%04d", f.agentN)
 	f.tokens = append(f.tokens, tok)
-	return wire.Agent{UserID: "@" + lp + ":" + wiretest.ServerName, AccessToken: tok, DeviceID: "KWAK", RoomID: wiretest.RoomID}, nil
+	uid := "@" + lp + ":" + wiretest.ServerName
+	f.user[tok] = uid
+	return wire.Agent{UserID: uid, AccessToken: tok, DeviceID: "KWAK", RoomID: wiretest.RoomID}, nil
 }
 
 func (f *fakeReg) Close(_ context.Context, ids []string, reason string) error {
@@ -226,6 +238,31 @@ func (f *fakeReg) Me(context.Context) (wire.Me, error) {
 
 func (f *fakeReg) Unpair(context.Context) error { return nil }
 
+// ReportJoin answers like a server with no report room unless reportRoom is set (5.17).
+func (f *fakeReg) ReportJoin(_ context.Context, userID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reportJoins = append(f.reportJoins, userID)
+	if err := f.authLocked(); err != nil {
+		return "", err
+	}
+	if f.reportErr != nil {
+		if err := f.reportErr(userID); err != nil {
+			return "", err
+		}
+	}
+	if f.reportRoom == "" {
+		return "", &wire.APIError{Status: 404, Errcode: wire.ErrNoReportRoom, Message: "no report room"}
+	}
+	return f.reportRoom, nil
+}
+
+func (f *fakeReg) joins() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.reportJoins...)
+}
+
 func (f *fakeReg) standingCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -249,6 +286,11 @@ func (f *fakeReg) agentCalls() int {
 type sent struct {
 	token, txn string
 	content    json.RawMessage
+	room       string
+}
+
+type reactSent struct {
+	token, event, key string
 }
 
 type syncResult struct {
@@ -263,15 +305,24 @@ type fakeRoom struct {
 	replies  map[string][]matrix.Event // root -> replies, oldest first
 	members  []string
 	sent     []sent
-	ids      []string // event ids Send hands out, in order
-	sendErr  []error  // errors Send returns first, in order
-	eventErr error
-	syncs    chan syncResult
-	since    []string
-	pages    map[string]*matrix.MessagesResponse
-	pageErr  map[string]error
-	froms    []string
-	fetches  int
+	reacts   []reactSent
+	reactErr error
+	// reactGate, when set, holds each React until it is closed, whatever the context says.
+	reactGate chan struct{}
+	reactHeld int      // React calls waiting on reactGate
+	ids       []string // event ids Send hands out, in order
+	sendErr   []error  // errors Send returns first, in order
+	eventErr  error
+	syncs     chan syncResult
+	since     []string
+	pages     map[string]*matrix.MessagesResponse
+	pageErr   map[string]error
+	froms     []string
+	fetches   int
+	memberN   int      // JoinedMembers calls
+	left      []string // Leave calls, "token room"
+	sendHold  bool     // Send waits until its context ends, then fails with the context's error
+	sendHeld  int      // Send calls waiting on sendHold
 }
 
 func newRoom() *fakeRoom {
@@ -309,8 +360,14 @@ func (m *fakeMatrix) Sync(ctx context.Context, since, filter string, timeout tim
 	}
 }
 
-func (m *fakeMatrix) Send(_ context.Context, roomID, txn string, content any) (string, error) {
+func (m *fakeMatrix) Send(ctx context.Context, roomID, txn string, content any) (string, error) {
 	m.r.mu.Lock()
+	if m.r.sendHold {
+		m.r.sendHeld++
+		m.r.mu.Unlock()
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	defer m.r.mu.Unlock()
 	if err := m.check(); err != nil {
 		return "", err
@@ -323,12 +380,42 @@ func (m *fakeMatrix) Send(_ context.Context, roomID, txn string, content any) (s
 		}
 	}
 	b, _ := json.Marshal(content)
-	m.r.sent = append(m.r.sent, sent{m.tok, txn, b})
+	m.r.sent = append(m.r.sent, sent{m.tok, txn, b, roomID})
 	id := fmt.Sprintf("$sent%d", len(m.r.sent))
 	if len(m.r.ids) > 0 {
 		id, m.r.ids = m.r.ids[0], m.r.ids[1:]
 	}
 	return id, nil
+}
+
+func (m *fakeMatrix) React(_ context.Context, roomID, txn, eventID, key string) (string, error) {
+	m.r.mu.Lock()
+	if gate := m.r.reactGate; gate != nil {
+		m.r.reactHeld++
+		m.r.mu.Unlock()
+		<-gate
+		m.r.mu.Lock()
+	}
+	defer m.r.mu.Unlock()
+	if err := m.check(); err != nil {
+		return "", err
+	}
+	if m.r.reactErr != nil {
+		return "", m.r.reactErr
+	}
+	m.r.reacts = append(m.r.reacts, reactSent{m.tok, eventID, key})
+	return fmt.Sprintf("$react%d", len(m.r.reacts)), nil
+}
+
+// reactions lists the reactions sent so far as "token event key".
+func (r *fakeRoom) reactions() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.reacts))
+	for i, x := range r.reacts {
+		out[i] = x.token + " " + x.event + " " + x.key
+	}
+	return out
 }
 
 func (m *fakeMatrix) Messages(_ context.Context, roomID, from string, limit int, filter string) (*matrix.MessagesResponse, error) {
@@ -376,9 +463,24 @@ func (m *fakeMatrix) ThreadReplies(_ context.Context, roomID, root string, limit
 	return out, nil
 }
 
+// Leave records "token room". Like a real request, it fails on a context that already ended.
+func (m *fakeMatrix) Leave(ctx context.Context, roomID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.r.mu.Lock()
+	defer m.r.mu.Unlock()
+	if err := m.check(); err != nil {
+		return err
+	}
+	m.r.left = append(m.r.left, m.tok+" "+roomID)
+	return nil
+}
+
 func (m *fakeMatrix) JoinedMembers(context.Context, string) ([]string, error) {
 	m.r.mu.Lock()
 	defer m.r.mu.Unlock()
+	m.r.memberN++
 	return append([]string(nil), m.r.members...), nil
 }
 
@@ -402,21 +504,32 @@ type run struct {
 	done chan error
 }
 
+// fakeRunner records runs. A cancel ends a run at once and calls onCancel, as a real run's process
+// is then gone; a stubborn runner ignores the cancel and ends only through done.
 type fakeRunner struct {
-	mu   sync.Mutex
-	runs []*run
+	mu       sync.Mutex
+	runs     []*run
+	onCancel func()
+	stubborn bool
 }
 
 func (f *fakeRunner) Start(ctx context.Context, dir string, argv []string, log io.Writer) (func() error, error) {
 	r := &run{dir: dir, argv: argv, done: make(chan error, 1)}
 	f.mu.Lock()
 	f.runs = append(f.runs, r)
+	stubborn, onCancel := f.stubborn, f.onCancel
 	f.mu.Unlock()
 	return func() error {
+		if stubborn {
+			return <-r.done
+		}
 		select {
 		case err := <-r.done:
 			return err
 		case <-ctx.Done():
+			if onCancel != nil {
+				onCancel()
+			}
 			return ctx.Err()
 		}
 	}, nil
@@ -426,6 +539,54 @@ func (f *fakeRunner) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.runs)
+}
+
+// ---- check commands ----
+
+// fakeCheck is a check command double (spec 5.16). It records the texts it was given and answers
+// with exit and out, or err. With gate set, each run waits for the gate or for its context.
+type fakeCheck struct {
+	mu      sync.Mutex
+	exes    []string
+	texts   []string
+	exit    int
+	out     string
+	err     error
+	gate    chan struct{}
+	gates   map[string]chan struct{} // per stdin text, so checks can end in a chosen order
+	running int
+	peak    int
+}
+
+func (f *fakeCheck) Run(ctx context.Context, exe string, stdin []byte) (int, []byte, error) {
+	f.mu.Lock()
+	f.exes, f.texts = append(f.exes, exe), append(f.texts, string(stdin))
+	f.running++
+	f.peak = max(f.peak, f.running)
+	gate, exit, out, err := f.gate, f.exit, f.out, f.err
+	if g, ok := f.gates[string(stdin)]; ok {
+		gate = g
+	}
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.running--
+		f.mu.Unlock()
+	}()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return -1, nil, ctx.Err()
+		}
+	}
+	return exit, []byte(out), err
+}
+
+func (f *fakeCheck) calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.texts...)
 }
 
 // ---- environment ----
@@ -461,11 +622,48 @@ type env struct {
 	procs    *proctest.Reader
 	sec      *secretstest.Memory
 	runner   *fakeRunner
+	check    *fakeCheck
 	dir      string
 	confPath string
 	pid      atomic.Int64
 	pidOK    atomic.Bool
 	dirs     map[string]bool
+	logs     logBuf
+}
+
+// logBuf keeps the listener's log lines for tests that read them.
+type logBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (w *logBuf) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *logBuf) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+// waitLog waits until the listener's log holds every part on one line.
+func (e *env) waitLog(parts ...string) {
+	e.t.Helper()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		for _, line := range strings.Split(e.logs.String(), "\n") {
+			ok := true
+			for _, p := range parts {
+				ok = ok && strings.Contains(line, p)
+			}
+			if ok {
+				return
+			}
+		}
+	}
+	e.t.Fatalf("no log line with %q in:\n%s", parts, e.logs.String())
 }
 
 type opt func(*env, *Config)
@@ -480,18 +678,19 @@ func machineConf() MachineConfig {
 	return MachineConfig{Version: 1, Server: "https://" + wiretest.ServerName, ServerName: wiretest.ServerName,
 		Owner: wiretest.Owner, Machine: wiretest.Machine, PairingID: wiretest.PairingID, RoomID: wiretest.RoomID,
 		StandingUser: wiretest.StandingUser, ResumeMax: 2,
-		ResumeExe: map[wire.Harness]string{wire.HarnessClaude: "/opt/bin/claude"}}
+		ResumeExe:   map[wire.Harness]string{wire.HarnessClaude: "/opt/bin/claude"},
+		KeyringUser: secrets.PairingKeyName(wiretest.ServerName, wiretest.PairingID)}
 }
 
 func newEnv(t *testing.T, opts ...opt) *env {
 	t.Helper()
 	root := t.TempDir()
 	e := &env{t: t, clk: newClock(at("2026-11-02T10:49:00Z")), reg: newReg(), room: newRoom(), procs: proctest.New(),
-		sec: secretstest.Mem(), runner: &fakeRunner{}, dir: filepath.Join(root, "state"),
+		sec: secretstest.Mem(), runner: &fakeRunner{}, check: &fakeCheck{}, dir: filepath.Join(root, "state"),
 		confPath: filepath.Join(root, "config.json"), dirs: map[string]bool{}}
 	e.pidOK.Store(true)
 	writeConf(t, e.confPath, machineConf())
-	e.sec.Set(secrets.OwnerKeyName(wiretest.ServerName), wiretest.OwnerKey)
+	e.sec.Set(secretsKey, wiretest.OwnerKey)
 	cfg := Config{ConfigPath: e.confPath, CheckDir: func(p string) bool {
 		return e.dirs[p] || realDir(p)
 	}}
@@ -505,8 +704,9 @@ func newEnv(t *testing.T, opts ...opt) *env {
 
 func (e *env) build(cfg Config) *Listener {
 	l, err := New(cfg, e.dir, Deps{
-		Secrets: e.sec, Registrar: e.reg, Matrix: e.room.client, Procs: e.procs, Runner: e.runner, Clock: e.clk,
+		Secrets: e.sec, Registrar: e.reg, Matrix: e.room.client, Procs: e.procs, Runner: e.runner, Check: e.check, Clock: e.clk,
 		PeerPID: func(net.Conn) (int, bool, error) { return int(e.pid.Load()), e.pidOK.Load(), nil },
+		Log:     slog.New(slog.NewTextHandler(&e.logs, nil)),
 	})
 	if err != nil {
 		e.t.Fatal(err)

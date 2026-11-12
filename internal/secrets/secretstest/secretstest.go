@@ -2,6 +2,7 @@
 package secretstest
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/fcanela/kwak/internal/secrets"
@@ -31,6 +32,18 @@ func (s *Memory) Sets() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sets
+}
+
+// Items lists the keys that hold a value, sorted.
+func (s *Memory) Items() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.m))
+	for k := range s.m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Get implements secrets.Secrets.

@@ -75,8 +75,19 @@ const trustStep = "# Then run codex (the TUI) once and choose \"Review hooks\" o
 	"# Until then codex exec skips kwak's hooks without a word. Tools still work.\n"
 
 // Main is `kwak setup claude|codex [--write|--remove]`.
-func Main(args []string, _ io.Reader, stdout, stderr io.Writer) int {
+func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return mainFor(false, args, stdout, stderr)
+}
+
+// DevMain is Main in a dev build (make dev): --write and --remove change Codex's config only
+// when CODEX_HOME is set, so a dev build never points the real ~/.codex at itself (decision 40).
+func DevMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return mainFor(true, args, stdout, stderr)
+}
+
+func mainFor(dev bool, args []string, stdout, stderr io.Writer) int {
 	home := os.Getenv(EnvCodexHome)
+	explicit := home != ""
 	if home == "" {
 		if h, err := os.UserHomeDir(); err == nil {
 			home = filepath.Join(h, ".codex")
@@ -87,14 +98,20 @@ func Main(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "kwak setup:", err)
 		return 1
 	}
-	return run(args, stdout, stderr, env{codexHome: home, exe: exe, goos: runtime.GOOS})
+	return run(args, stdout, stderr, env{codexHome: home, exe: exe, goos: runtime.GOOS, dev: dev, homeSet: explicit})
 }
 
 type env struct {
 	codexHome string
 	exe       string
 	goos      string
+	dev       bool // a dev build
+	homeSet   bool // CODEX_HOME was set, not the ~/.codex default
 }
+
+// textDevCodexHome is why a dev build refuses to write the default Codex home.
+const textDevCodexHome = "this is a dev build, so it changes Codex's config only in a CODEX_HOME you set " +
+	"(for example CODEX_HOME=$HOME/.codex-kwak-dev), never in ~/.codex, which your real kwak uses"
 
 const usage = "usage: kwak setup claude | kwak setup codex [--write | --remove] [--exe <path>]"
 
@@ -137,6 +154,10 @@ func run(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprint(stdout, claudeSteps())
 		return 0
 	case wire.HarnessCodex:
+		if e.dev && mode != "" && !e.homeSet {
+			fmt.Fprintln(stderr, "kwak setup codex:", textDevCodexHome)
+			return 1
+		}
 		var err error
 		switch mode {
 		case "":

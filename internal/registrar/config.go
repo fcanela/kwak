@@ -45,6 +45,9 @@ type Config struct {
 	AppserviceAddr   string   `json:"appservice_addr"`
 	APIAddr          string   `json:"api_addr"`
 	Room             string   `json:"room"`
+	ReportRoom       string   `json:"report_room,omitempty"`      // optional (decision 39)
+	TestRoom         string   `json:"test_room,omitempty"`        // optional; test pairings need it (decision 40)
+	TestReportRoom   string   `json:"test_report_room,omitempty"` // optional (decisions 39 and 40)
 	Admins           []string `json:"admins"`
 	IdleAfter        Duration `json:"idle_after"`
 	CloseGrace       Duration `json:"close_grace"`
@@ -93,8 +96,33 @@ func (c *Config) Check() error {
 	if c.ServerName == "" || strings.ContainsAny(c.ServerName, "/@!#$ ") {
 		errs = append(errs, fmt.Errorf("server_name %q is not a server name", c.ServerName))
 	}
-	if !strings.HasPrefix(c.Room, "#") || !strings.HasSuffix(c.Room, ":"+c.ServerName) {
+	if !c.alias(c.Room) {
 		errs = append(errs, fmt.Errorf("room %q must be an alias on %s", c.Room, c.ServerName))
+	} else if testName(c.Room) {
+		errs = append(errs, fmt.Errorf("room %q must not end in %q: that name is for test rooms", c.Room, testSuffix))
+	}
+	// Test rooms are told apart by name (decision 41): the two test rooms end in "-test", the two
+	// others do not. So a mistyped alias cannot put a test pairing in a room for real work.
+	seen := map[string]string{c.Room: "room"}
+	for _, side := range []struct {
+		key, alias string
+		test       bool
+	}{
+		{"report_room", c.ReportRoom, false}, {"test_room", c.TestRoom, true}, {"test_report_room", c.TestReportRoom, true},
+	} {
+		switch {
+		case side.alias == "":
+		case !c.alias(side.alias):
+			errs = append(errs, fmt.Errorf("%s %q must be an alias on %s", side.key, side.alias, c.ServerName))
+		case side.test && !testName(side.alias):
+			errs = append(errs, fmt.Errorf("%s %q must end in %q, for example #agents-test:%s", side.key, side.alias, testSuffix, c.ServerName))
+		case !side.test && testName(side.alias):
+			errs = append(errs, fmt.Errorf("%s %q must not end in %q: that name is for test rooms", side.key, side.alias, testSuffix))
+		case seen[side.alias] != "":
+			errs = append(errs, fmt.Errorf("%s %q is also %s: each room must be its own", side.key, side.alias, seen[side.alias]))
+		default:
+			seen[side.alias] = side.key
+		}
 	}
 	for _, a := range c.Admins {
 		if !c.local(a) {
@@ -105,6 +133,23 @@ func (c *Config) Check() error {
 		errs = append(errs, errors.New("no hs_token"))
 	}
 	return errors.Join(errs...)
+}
+
+// testSuffix ends the name of every test room, and of no other kwak room (decision 41).
+const testSuffix = "-test"
+
+// testName reports whether the room alias a names a test room: its local part, before the colon,
+// ends in testSuffix.
+func testName(a string) bool {
+	name, _, _ := strings.Cut(strings.TrimPrefix(a, "#"), ":")
+	return strings.HasSuffix(name, testSuffix)
+}
+
+// alias reports whether a is a room alias on this server.
+func (c *Config) alias(a string) bool {
+	name, ok := strings.CutPrefix(a, "#")
+	name, ok2 := strings.CutSuffix(name, ":"+c.ServerName)
+	return ok && ok2 && name != "" && !strings.ContainsAny(name, ":# ")
 }
 
 // local reports whether mxid is a user id on this server.

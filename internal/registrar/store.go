@@ -63,6 +63,16 @@ type Pairing struct {
 	IPs          map[string]time.Time `json:"ips"`
 	LastIP       string               `json:"last_ip"`
 	LastUsed     time.Time            `json:"last_used,omitzero"`
+	// Test marks a test pairing (decision 40), made with `pair test <code>`. It is written only
+	// when true, so a state.json with no test pairing keeps the shape an older image reads.
+	Test bool `json:"test,omitempty"`
+	// Listener is the localpart of the pairing's own listener account (decision 42),
+	// agent.<owner>.<pair>[-test].listener, chosen at `pair <code>`. A same-kind re-pair takes the
+	// name of the pairing it replaces. It is empty only on a pairing made before decision 42, which
+	// gets one at its next POST /standing or job pass. It is written only when set, so a state.json
+	// with no such pairing keeps the shape an older image reads. Who holds the account is its
+	// agent record's Pairing.
+	Listener string `json:"listener,omitempty"`
 }
 
 // Agent is one agent account, keyed by localpart. A foreign clash is a closed record with

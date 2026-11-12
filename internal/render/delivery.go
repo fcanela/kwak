@@ -28,6 +28,9 @@ type Item struct {
 	Body       string    `json:"body"`
 	Helper     string    `json:"helper,omitempty"`
 	Note       string    `json:"note,omitempty"`
+	// OwnThread: the item is a reply in a thread this agent started. It asks the agent nothing
+	// new, even when it mentions it, so it gets no refusal sentence (spec 6.1).
+	OwnThread bool `json:"own_thread,omitempty"`
 }
 
 // Per-message caps (spec 6.1).
@@ -44,6 +47,10 @@ const (
 
 const (
 	answerLine = "To answer, call the kwak reply tool with the thread id."
+	// refuseLine follows answerLine when an item mentions the agent outside its own threads: the
+	// asker waits on it, so a refusal should reach the asker too (decision 33, spec 6.1).
+	refuseLine = "If you will not or cannot answer a question asked of you, reply with one short line that says so, " +
+		"so the asker does not wait."
 	timeLayout = "2006-01-02 15:04 UTC"
 )
 
@@ -102,7 +109,7 @@ func assemble(me string, blocks []string, items []Item, total int) string {
 	k := len(blocks)
 	var b strings.Builder
 	b.WriteString(preamble(me, k))
-	answer := false
+	answer, asked := false, false
 	for i, blk := range blocks {
 		if i > 0 {
 			b.WriteByte('\n')
@@ -116,10 +123,17 @@ func assemble(me string, blocks []string, items []Item, total int) string {
 		if items[i].Reason != Notice {
 			answer = true
 		}
+		if items[i].Reason == Mention && !items[i].OwnThread {
+			asked = true
+		}
 	}
 	if answer {
 		b.WriteByte('\n')
 		b.WriteString(answerLine)
+		if asked {
+			b.WriteByte(' ')
+			b.WriteString(refuseLine)
+		}
 	}
 	if more := total - k; more > 0 {
 		b.WriteByte('\n')
@@ -197,12 +211,24 @@ func Body(s, thread string, maxChars, maxLines int) []string {
 	return body(s, thread, maxChars, maxLines)
 }
 
+// Quote frames a message body for people, as Body does for a model: sanitized, tag-like text
+// escaped, every line prefixed with "| ", at most maxChars characters and maxLines lines. A cut
+// adds "[cut: N more characters]" with no pointer to the thread tool, which people do not have.
+func Quote(s string, maxChars, maxLines int) []string {
+	return cutBody(s, maxChars, maxLines, "")
+}
+
 // Line makes s one sanitized header line with tag-like text escaped.
 func Line(s string) string { return clean(s) }
 
 // body sanitizes s, applies the caps (limit characters, maxLines lines when > 0), escapes tag-like
 // text and prefixes every line with "| ". A cut adds one unprefixed "[cut: ...]" line.
 func body(s, thread string, limit, maxLines int) []string {
+	return cutBody(s, limit, maxLines, "; read the whole message with the kwak thread tool, thread "+clean(thread))
+}
+
+// cutBody is body with the text that follows the count in the "[cut: ...]" line.
+func cutBody(s string, limit, maxLines int, cutTail string) []string {
 	s = strings.TrimRight(Sanitize(s), "\n")
 	lines := strings.Split(s, "\n")
 	total := utf8.RuneCountInString(s)
@@ -233,8 +259,7 @@ func body(s, thread string, limit, maxLines int) []string {
 		break
 	}
 	if cut {
-		out = append(out, "[cut: "+strconv.Itoa(total-kept)+
-			" more characters; read the whole message with the kwak thread tool, thread "+clean(thread)+"]")
+		out = append(out, "[cut: "+strconv.Itoa(total-kept)+" more characters"+cutTail+"]")
 	}
 	return out
 }

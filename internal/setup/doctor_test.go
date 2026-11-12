@@ -70,6 +70,7 @@ type fixture struct {
 	path   map[string]string
 	stat   map[string]bool
 	goos   string
+	dev    bool
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -164,6 +165,7 @@ func (f *fixture) deps() DoctorDeps {
 		},
 		ConfigDir:  func() (string, error) { return f.cfgDir, nil },
 		SocketPath: func() (string, error) { return "/run/user/1000/kwak/kwak.sock", nil },
+		Dev:        f.dev,
 	}
 }
 
@@ -199,6 +201,7 @@ func TestDoctorAllGood(t *testing.T) {
 	}
 	for _, s := range []string{"ok    bus:", "ok    config: paired as fcanela on laptop", "ok    keyring: the owner key is there (not shown)",
 		"ok    socket: /run/user/1000/kwak/kwak.sock, listener 0.1.0, syncing", "ok    PATH: " + exe,
+		"ok    account: the listener syncs as " + wiretest.StandingUser + ", this pairing's own listener account",
 		"ok    claude: the kwak plugin 0.1.0 is installed", "ok    codex: MCP server set"} {
 		if !strings.Contains(out, s) {
 			t.Errorf("output lacks %q:\n%s", s, out)
@@ -226,6 +229,20 @@ func TestDoctorProblems(t *testing.T) {
 			[]string{"FAIL  config: " + TextNotPaired, "skip  keyring"}, nil},
 		{"key missing", func(t *testing.T, f *fixture) { f.keys.Delete(secrets.OwnerKeyName("kwak.test")) }, 1,
 			[]string{"FAIL  keyring: " + TextKeyMissing}, nil},
+		{"own keyring item", func(t *testing.T, f *fixture) {
+			write(t, filepath.Join(f.cfgDir, "config.json"), `{"version":1,"server":"https://kwak.test","server_name":"kwak.test",`+
+				`"owner":"fcanela","machine":"laptop","pairing_id":"3f9a1c2e","keyring_user":"kwak.test/3f9a1c2e/owner-key","test":true}`)
+			f.keys.Delete(secrets.OwnerKeyName("kwak.test"))
+			f.keys.Set(secrets.PairingKeyName("kwak.test", "3f9a1c2e"), wiretest.OwnerKey)
+		}, 0, []string{"ok    config: paired as fcanela on laptop, server https://kwak.test (a test pairing)",
+			"ok    keyring: the owner key is there"}, nil},
+		{"own keyring item missing", func(t *testing.T, f *fixture) {
+			// The shared item holds another pairing's key; it does not count.
+			write(t, filepath.Join(f.cfgDir, "config.json"), `{"version":1,"server":"https://kwak.test","server_name":"kwak.test",`+
+				`"owner":"fcanela","machine":"laptop","pairing_id":"3f9a1c2e","keyring_user":"kwak.test/3f9a1c2e/owner-key"}`)
+		}, 1, []string{"FAIL  keyring: " + TextKeyMissing}, nil},
+		{"dev build", func(t *testing.T, f *fixture) { f.dev = true }, 0,
+			[]string{"warn  build: a dev build (make dev). It uses its own test folder, config "}, nil},
 		{"keyring locked", func(t *testing.T, f *fixture) { f.keys.Fail(secrets.ErrTimeout) }, 1,
 			[]string{"FAIL  keyring: " + TextKeyringLocked}, nil},
 		{"listener down", func(t *testing.T, f *fixture) { f.callOK = false }, 1,
@@ -239,7 +256,7 @@ func TestDoctorProblems(t *testing.T) {
 					f.status = row.Reply
 				}
 			}
-		}, 0, []string{"warn  listener: waiting for the keyring (locked?)", "caller checks: claimed"}, nil},
+		}, 0, []string{"warn  listener: waiting for the keyring (locked?)", "caller checks: claimed"}, []string{"account:"}},
 		{"env overrides", func(t *testing.T, f *fixture) {
 			f.env["KWAK_SOCKET"] = "/tmp/x.sock"
 			f.env["KWAK_STATE_DIR"] = "/tmp/s"

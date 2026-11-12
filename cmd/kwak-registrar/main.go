@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,7 +49,8 @@ func main() {
 const usage = `usage:
   kwak-registrar serve -config <config.json>
   kwak-registrar gen-registration -url <appservice url> -server <server name> [-format json|yaml] -o <path|->
-  kwak-registrar create-room -homeserver <https url> [-server <server name>]   (access token on stdin)
+  kwak-registrar create-room -homeserver <https url> [-server <server name>] [-alias <name>] [-invite-only]
+                             (access token on stdin; -alias defaults to agents)
 `
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer, d deps) int {
@@ -259,7 +261,13 @@ func createRoom(args []string, stdin io.Reader, stdout, stderr io.Writer, d deps
 	fs := flags("create-room", stderr)
 	hsURL := fs.String("homeserver", "", "homeserver URL, https://")
 	server := fs.String("server", "", "server name (default: the homeserver's host name)")
+	alias := fs.String("alias", "agents", "room alias name, for example agents-report or agents-test")
+	inviteOnly := fs.Bool("invite-only", false, "only invited accounts may join; @registrar is invited at once")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
+		return 2
+	}
+	if !roomAlias.MatchString(*alias) {
+		fmt.Fprintln(stderr, "kwak-registrar: -alias must be lowercase letters, digits, '.', '_' or '-'")
 		return 2
 	}
 	if !strings.HasPrefix(*hsURL, "https://") {
@@ -292,11 +300,18 @@ func createRoom(args []string, stdin io.Reader, stdout, stderr io.Writer, d deps
 	ctx, cancel := context.WithTimeout(d.ctx, 30*time.Second)
 	defer cancel()
 	bot := "@" + wire.BotLocalpart + ":" + name
-	id, err := c.CreateRoom(ctx, registrar.RoomBody(bot))
+	id, err := c.CreateRoom(ctx, registrar.RoomBodyFor(bot, *alias, *inviteOnly))
 	if err != nil {
 		fmt.Fprintf(stderr, "kwak-registrar: create the room: %v\n", registrar.ScrubError(err))
 		return 1
 	}
-	fmt.Fprintf(stdout, "Created #agents:%s (%s), with %s at power 50. Start the registrar; it joins on its own.\n", name, id, bot)
+	how := ""
+	if *inviteOnly {
+		how = ", invite only, and invited " + bot
+	}
+	fmt.Fprintf(stdout, "Created #%s:%s (%s), with %s at power 50%s. Start the registrar; it joins on its own.\n", *alias, name, id, bot, how)
 	return 0
 }
+
+// roomAlias is the alias name create-room accepts.
+var roomAlias = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)

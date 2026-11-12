@@ -208,6 +208,7 @@ func (l *Listener) mcpClosed(c *client) {
 }
 
 func (l *Listener) status(c *client) wire.StatusResponse {
+	out, in := l.checkPaths()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	r := wire.StatusResponse{
@@ -218,8 +219,22 @@ func (l *Listener) status(c *client) wire.StatusResponse {
 	if !c.pidOK {
 		r.CallerChecks = "claimed"
 	}
+	max := l.ceiling()
+	for root, t := range l.st.Turns {
+		if t.N >= max {
+			r.Paused = append(r.Paused, wire.PausedThread{Thread: root, Turns: t.N})
+		}
+	}
+	sort.Slice(r.Paused, func(i, j int) bool { return r.Paused[i].Thread < r.Paused[j].Thread })
+	if limit := l.resumePerHour(); len(l.hourRunsLocked(l.d.Clock.Now())) >= limit {
+		r.ResumeHourLimit, r.ResumeNextAt = limit, l.nextHourRunLocked(limit)
+	}
+	r.CheckOutgoing, r.CheckIncoming = out, in
+	r.CheckWaiting = len(l.st.Checking)
+	r.Rejected = append([]wire.Rejection(nil), l.st.Rejected...)
 	if conf := l.conf.Load(); l.phase != wire.StateUnpaired && conf != nil {
-		r.Server, r.Owner, r.Machine, r.PairingID = conf.Server, conf.Owner, conf.Machine, conf.PairingID
+		r.Server, r.Owner, r.Machine, r.PairingID, r.Test = conf.Server, conf.Owner, conf.Machine, conf.PairingID, conf.Test
+		r.ListenerAccount = l.standUser
 		r.SyncError = l.syncErr
 		if l.st.Settings != nil {
 			r.Settings, r.KeyExpiresAt, r.Resume = *l.st.Settings, l.st.KeyExpires, textResumeClaude
@@ -234,7 +249,7 @@ func (l *Listener) status(c *client) wire.StatusResponse {
 		}
 		ss := wire.SessionStatus{
 			Key: s.Key, Harness: s.Harness, SessionID: s.SessionID, Cwd: s.Cwd, Agent: s.Agent,
-			Volunteer: s.Volunteer, Tools: s.Tools, Started: s.Started, LastHook: s.LastHook, Inbox: s.waiting(),
+			Volunteer: s.Volunteer && s.Ended == nil, Tools: s.Tools, Started: s.Started, LastHook: s.LastHook, Inbox: s.waiting(),
 		}
 		if s.Ended != nil {
 			ss.Ended = *s.Ended

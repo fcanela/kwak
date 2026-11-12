@@ -175,14 +175,14 @@ func TestRevokeDuringNewIPNoticeRefusesStanding(t *testing.T) {
 	if c := f.callJSON("POST", wire.PathStanding, p.key, struct{}{}, nil); c != 401 {
 		t.Fatalf("POST /standing after a revoke: %d", c)
 	}
-	if toks := f.deviceTokens(mx("agent.fcanela.listener"), "KWAK-"+p.id); len(toks) != 0 {
+	if toks := f.deviceTokens(f.listenerUID(p.id), "KWAK-"+p.id); len(toks) != 0 {
 		t.Fatalf("standing device tokens %v on a revoked pairing (I9)", toks)
 	}
 }
 
 func TestRevokeWaitsForStandingLogin(t *testing.T) {
 	f, p := pairedFixture(t)
-	uid, dev := mx("agent.fcanela.listener"), "KWAK-"+p.id
+	uid, dev := f.listenerUID(p.id), "KWAK-"+p.id
 	var wg sync.WaitGroup
 	f.hook("LogoutDevice", uid+"/"+dev, func() {
 		done := make(chan struct{})

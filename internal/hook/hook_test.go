@@ -276,6 +276,24 @@ func TestListenerHung(t *testing.T) {
 	}
 }
 
+// SessionStart waits longer than the other hooks: the listener may be stopping the session's
+// background run first (spec 5.6, 5.11).
+func TestSessionStartWaitsForASlowListener(t *testing.T) {
+	if StartTimeout < 8*time.Second || StartTimeout >= 10*time.Second {
+		t.Fatalf("StartTimeout %v must stay under the plugin's 10 s hook timeout", StartTimeout)
+	}
+	l := serve(t, func(string) string {
+		time.Sleep(ExchangeTimeout + time.Second)
+		return `{"v":1,"ok":true,"kwak":"0.1.0","text":"late but shown"}`
+	})
+	var out bytes.Buffer
+	code := mainWith([]string{"claude", "session-start"}, strings.NewReader(`{"session_id":"s","cwd":"/tmp","source":"resume"}`),
+		&out, &bytes.Buffer{}, func() (string, error) { return l.path, nil }, nil)
+	if code != 0 || !strings.Contains(out.String(), "late but shown") {
+		t.Fatalf("exit %d, stdout %q", code, out.String())
+	}
+}
+
 func TestUsage(t *testing.T) {
 	for _, args := range [][]string{nil, {"claude"}, {"vim", "prompt"}, {"claude", "pre-tool"}, {"claude", "prompt", "x"}} {
 		var out, errOut bytes.Buffer

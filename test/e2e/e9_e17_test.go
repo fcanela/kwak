@@ -335,7 +335,9 @@ func e15(t *testing.T, w *World, a, b *FakeHarness, root string) {
 	})
 	run := w.Alice.Runner.Runs()[0]
 	want := []string{w.Kwak, "-p", e15Prompt, "--resume", a.SessionID, "--tools", "",
-		"--allowedTools", "mcp__plugin_kwak_kwak__send,mcp__plugin_kwak_kwak__reply,mcp__plugin_kwak_kwak__thread"}
+		"--allowedTools", "mcp__kwak__send,mcp__kwak__reply,mcp__kwak__thread",
+		"--strict-mcp-config", "--mcp-config", `{"mcpServers":{"kwak":{"command":"kwak","args":["mcp","--harness","claude"]}}}`,
+		"--permission-mode", "dontAsk"}
 	if !slices.Equal(run.Argv, want) {
 		t.Fatalf("resume argv:\n got %q\nwant %q", run.Argv, want)
 	}
@@ -396,7 +398,7 @@ func e17(t *testing.T, w *World) (a1, a2 *FakeHarness) {
 	ans := w.LastInThread(t, q)
 	w.Alice.WaitInbox(t, a1, 1)
 	SameJSON(t, "A1's prompt", a1.Hook(t, wire.EventPrompt, nil), ContextJSON("UserPromptSubmit",
-		Rendered(a1ID, wire.HarnessClaude, w.Item(t, ans, render.Mention, q))))
+		Rendered(a1ID, wire.HarnessClaude, Own(w.Item(t, ans, render.Mention, q)))))
 	silent(a2, "A2, the answerer")
 	silent(a1, "A1 after its answer")
 
@@ -421,7 +423,7 @@ func e17(t *testing.T, w *World) (a1, a2 *FakeHarness) {
 	}
 	ans = w.LastInThread(t, hq)
 	w.Alice.WaitInbox(t, a1, 1)
-	it := w.Item(t, ans, render.Mention, hq)
+	it := Own(w.Item(t, ans, render.Mention, hq))
 	it.Helper = "tests"
 	SameJSON(t, "A1's prompt for its helper's answer", a1.Hook(t, wire.EventPrompt, nil), ContextJSON("UserPromptSubmit",
 		Rendered(a1ID, wire.HarnessClaude, it)))
@@ -435,7 +437,7 @@ func e17(t *testing.T, w *World) (a1, a2 *FakeHarness) {
 func e13(t *testing.T, w *World, b *FakeHarness, bID string, waker *FakeHarness) {
 	old := e9Token(t, w, bID, time.Time{})
 	pairing := w.Bob.Config(t).PairingID
-	standing := "@" + wire.StandingLocalpart("bob") + ":" + Server
+	standing := w.Reg.Listener(t, pairing)
 	Send(t, w.Bob.Human.C, w.Bob.Human.DM, "revoke all")
 	WaitNotice(t, w.Bob.Human.C, w.Bob.Human.DM, "Revoked 1 pairing(s) of bob.")
 	w.Reg.View(func(st *registrar.State) {
@@ -568,10 +570,10 @@ func e10(t *testing.T, w *World) {
 	w.WaitMember(t, bID, false)
 	e9WaitDead(t, w, old)
 
-	standing := "@" + wire.StandingLocalpart("bob") + ":" + Server
 	pairing := w.Bob.Config(t).PairingID
+	standing := w.Reg.Listener(t, pairing)
 	time.Sleep(2 * w.Reg.Cfg.IdleAfter.D()) // more idle periods, each with job runs
-	if r := w.Reg.Agent(wire.StandingLocalpart("bob")); r == nil || !r.Open() {
+	if r := w.Reg.Agent(standing[1 : len(standing)-len(":"+Server)]); r == nil || !r.Open() {
 		t.Fatalf("bob's standing account after the idle job: %+v", r)
 	}
 	if !slices.Contains(w.Members(t), standing) {

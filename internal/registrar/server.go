@@ -43,6 +43,8 @@ type Server struct {
 	tmu      sync.Mutex
 	txns     map[string]bool
 	txnOrder []string
+	smu      sync.Mutex
+	side     map[string]*sideRoom // side rooms by config key, ids in memory only (rooms.go)
 }
 
 const (
@@ -70,6 +72,7 @@ func (s *Server) init() {
 		if s.Clock == nil {
 			s.Clock = SystemClock{}
 		}
+		s.initSide()
 	})
 }
 
@@ -197,7 +200,8 @@ func hsErrcode(err error) string {
 }
 
 // Start resolves the agents room, retrying every 5 s until it exists, joins it as @registrar,
-// stores its id, and opens a DM for each admin who has none (spec 3.5, 3.11).
+// stores its id, tries each configured side room once without waiting for it, and opens a DM for
+// each admin who has none (spec 3.5, 3.11). RunJobs keeps trying side rooms that are not there.
 func (s *Server) Start(ctx context.Context) error {
 	s.init()
 	for {
@@ -212,6 +216,7 @@ func (s *Server) Start(ctx context.Context) error {
 		case <-time.After(roomRetry):
 		}
 	}
+	s.joinSideRooms(ctx, true)
 	s.adminDMs(ctx)
 	return nil
 }

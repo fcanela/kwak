@@ -429,10 +429,19 @@ func (o *Owner) Config(t *testing.T) *wire.MachineConfig {
 	return c
 }
 
-// Key returns the owner key in the keyring double, or "".
+// Key returns the owner key in the keyring double, or "": from the item config.json names
+// (secrets.KeyName, decision 40), or the old shared item when there is no config.json.
 func (o *Owner) Key() string {
-	k, _ := o.Keys.Get(secrets.OwnerKeyName(Server))
+	k, _ := o.Keys.Get(o.KeyName())
 	return k
+}
+
+// KeyName is the keyring item of this owner's pairing.
+func (o *Owner) KeyName() string {
+	if c, err := listener.ReadMachineConfig(o.ConfigPath()); err == nil {
+		return c.KeyName()
+	}
+	return secrets.OwnerKeyName(Server)
 }
 
 // CLI returns kwak's human commands for this owner, with a terminal and no service manager.
@@ -953,6 +962,13 @@ func (w *World) Item(t *testing.T, eventID string, reason render.Reason, root st
 	json.Unmarshal(ev.Content, &c)
 	return render.Item{EventID: ev.EventID, Sender: Short(ev.Sender), ThreadRoot: root,
 		SentAt: time.UnixMilli(ev.TS).UTC(), Reason: reason, Body: c.Body}
+}
+
+// Own marks an item as a reply in a thread its recipient started, so it gets no refusal sentence
+// (spec 6.1).
+func Own(it render.Item) render.Item {
+	it.OwnThread = true
+	return it
 }
 
 // Budget is the per-delivery budget of a harness (spec 5.5).

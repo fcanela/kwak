@@ -192,3 +192,91 @@ func TestCurrent(t *testing.T) {
 		t.Fatalf("override ignored: %q", p)
 	}
 }
+
+// A dev build (make dev) uses kwak-dev wherever a release uses kwak, so no default path of a dev
+// build is a path of a release (decision 40). The overrides still win, which is how a developer
+// points a dev build at a real pairing on purpose.
+func TestDevLayout(t *testing.T) {
+	lin := linuxSys()
+	lin.dev = true
+	withRun := lin
+	withRun.runUser = "/run/user/1000"
+	mac := sys{
+		goos: "darwin", getenv: env(nil), uid: "501", home: "/Users/u",
+		userConfig: "/Users/u/Library/Application Support", dev: true,
+	}
+	win := sys{
+		goos: "windows", getenv: env(nil), uid: "S-1-5-21-1",
+		home: `C:\Users\u`, userConfig: `C:\Users\u\AppData\Roaming`,
+		localAppData: `C:\Users\u\AppData\Local`, dev: true,
+	}
+	winDir := filepath.Join(win.localAppData, "kwak-dev")
+	cases := []struct {
+		name                string
+		s                   sys
+		config, state, sock string
+	}{
+		{"linux no run dir", lin, "/home/u/.config/kwak-dev", "/home/u/.local/state/kwak-dev", "/home/u/.cache/kwak-dev/kwak.sock"},
+		{"linux run dir", withRun, "/home/u/.config/kwak-dev", "/home/u/.local/state/kwak-dev", "/run/user/1000/kwak-dev/kwak.sock"},
+		{"darwin", mac, "/Users/u/Library/Application Support/kwak-dev", "/Users/u/Library/Application Support/kwak-dev", "/Users/u/Library/Caches/kwak-dev/kwak.sock"},
+		{"windows", win, winDir, winDir, filepath.Join(winDir, "kwak.sock")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			check(t, "config", c.config, c.s.configDir)
+			check(t, "state", c.state, c.s.stateDir)
+			check(t, "socket", c.sock, c.s.socketPath)
+			rel := c.s
+			rel.dev = false
+			for _, f := range [][2]func() (string, error){{c.s.configDir, rel.configDir}, {c.s.stateDir, rel.stateDir}, {c.s.socketPath, rel.socketPath}} {
+				d, _ := f[0]()
+				r, _ := f[1]()
+				if d == r || strings.HasPrefix(d, r+string(filepath.Separator)) {
+					t.Errorf("dev path %q overlaps release path %q", d, r)
+				}
+			}
+		})
+	}
+
+	long := lin
+	long.home = "/" + strings.Repeat("h", 100)
+	check(t, "dev fallback", "/tmp/kwak-dev-1000/kwak.sock", long.socketPath)
+
+	lin.getenv = env(map[string]string{EnvConfigDir: "/home/u/.config/kwak", EnvStateDir: "/home/u/.local/state/kwak",
+		EnvSocket: "/run/user/1000/kwak/kwak.sock"})
+	check(t, "override config", "/home/u/.config/kwak", lin.configDir)
+	check(t, "override state", "/home/u/.local/state/kwak", lin.stateDir)
+	check(t, "override socket", "/run/user/1000/kwak/kwak.sock", lin.socketPath)
+}
+
+// The test binary is not a dev build: only make dev links one.
+func TestNotDevByDefault(t *testing.T) {
+	if Dev() {
+		t.Fatal("a plain go build or go test is a dev build")
+	}
+}
+
+// make dev links the variable Dev reads, and the Nix package links no -X flag at all, so only
+// make dev makes a dev build (decision 40). This catches a rename of the variable.
+func TestDevFlagWiring(t *testing.T) {
+	mk, err := os.ReadFile("../../Makefile")
+	if os.IsNotExist(err) {
+		t.Skip("no Makefile: the Nix build copies only the Go sources")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mk), "-X github.com/fcanela/kwak/internal/paths.flavor=dev") {
+		t.Fatal("make dev does not set paths.flavor")
+	}
+	nix, err := os.ReadFile("../../flake.nix")
+	if os.IsNotExist(err) {
+		t.Skip("no flake.nix")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(nix), "-X") || strings.Contains(string(nix), "flavor") {
+		t.Fatal("the Nix package sets a link-time flag; it must stay a release build")
+	}
+}

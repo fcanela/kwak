@@ -151,6 +151,9 @@ func TestReloadRereadsConfig(t *testing.T) {
 	eventually(t, "connect", func() bool { return e.reg.standingCalls() == 1 })
 	c := machineConf()
 	c.PairingID = "aaaa0000"
+	// A re-pair writes the new pairing's own keyring item next to config.json (decision 40).
+	c.KeyringUser = secrets.PairingKeyName(wiretest.ServerName, "aaaa0000")
+	e.sec.Set(c.KeyringUser, wiretest.OwnerKey)
 	writeConf(t, e.confPath, c)
 	if r := e.l.reload(); !r.OK {
 		t.Fatal(r)
@@ -449,7 +452,7 @@ func TestReloadRacesToolHelpers(t *testing.T) {
 		}
 	}()
 	for i := 0; i < 20; i++ {
-		if _, msg := e.l.normalizeTo([]string{"agent.bob"}); msg != "" {
+		if _, msg := e.l.normalizeTo([]string{"agent.bob.0718a1b2c3d4e5f6"}); msg != "" {
 			t.Fatal(msg)
 		}
 		e.l.short(bob)

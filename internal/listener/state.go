@@ -35,9 +35,21 @@ type state struct {
 	Mine        map[string]Agent     `json:"mine"`
 	Roots       map[string]string    `json:"roots"`
 	Threads     map[string]Thread    `json:"threads"`
-	Questions   map[string]*question `json:"questions"`
+	Questions   map[string]*question `json:"questions"`      // sent with mentions
+	OpenQs      map[string]*question `json:"open_questions"` // sent with no mentions (spec 5.9)
 	Backfill    *backfill            `json:"backfill,omitempty"`
 	ResumeRuns  int                  `json:"resume_runs"`
+	Turns       map[string]*turns    `json:"turns,omitempty"` // thread root -> automatic turns on this machine (5.15)
+	// Checking holds the messages waiting for the incoming check command, by event id, out of
+	// every inbox (5.16). Rejected is the latest messages a check stopped, for kwak status.
+	Checking map[string]*pendingCheck `json:"checking,omitempty"`
+	Rejected []wire.Rejection         `json:"rejected,omitempty"`
+}
+
+// turns counts the background runs started for one thread since a person last wrote in it.
+type turns struct {
+	N    int       `json:"n"`
+	Last time.Time `json:"last"`
 }
 
 // session is one harness session (spec 5.5).
@@ -84,6 +96,7 @@ type handover struct {
 	ToSession string    `json:"to_session"`
 	At        time.Time `json:"at"`
 	Shown     bool      `json:"shown,omitempty"`
+	Threads   []string  `json:"threads,omitempty"` // thread ids of the moved items, first seen first
 }
 
 type question struct {
@@ -123,6 +136,15 @@ func (s *state) init() {
 	}
 	if s.Questions == nil {
 		s.Questions = map[string]*question{}
+	}
+	if s.OpenQs == nil {
+		s.OpenQs = map[string]*question{}
+	}
+	if s.Turns == nil {
+		s.Turns = map[string]*turns{}
+	}
+	if s.Checking == nil {
+		s.Checking = map[string]*pendingCheck{}
 	}
 	for _, se := range s.Sessions {
 		if se.Helpers == nil {

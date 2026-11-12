@@ -30,19 +30,30 @@ func TestPairingFlow(t *testing.T) {
 
 	// Matching ignores case and dashes.
 	out := f.say(mx("fcanela"), dm, "PAIR "+strings.ToLower(strings.ReplaceAll(pr.Code, "-", "")))
-	if len(out) != 1 || !strings.Contains(out[0], "Paired machine 'laptop' (linux) as pairing ") ||
+	if len(out) != 1 || !regexp.MustCompile(`^Paired machine 'laptop' \(linux\) as [a-z]+-[a-z]+ \(pairing [0-9a-f]{8}\), `).MatchString(out[0]) ||
 		!strings.Contains(out[0], "asked from "+testIP+" at 10:05 UTC") || !strings.Contains(out[0], "The key expires 2027-01-31") ||
 		!strings.Contains(out[0], "send: revoke ") {
 		t.Fatalf("bot reply %q", out)
 	}
-	if !f.hs.member(testRoom, mx("agent.fcanela.listener")) {
-		t.Error("standing account not in the room")
-	}
 	if c := f.callJSON("POST", wire.PathPairClaim, pr.Claim, struct{}{}, &cr); c != 200 {
 		t.Fatalf("claim: %d %s", c, f.last)
 	}
+	// The pairing's own listener account (decision 42): named at `pair <code>`, made at the first
+	// POST /standing.
+	lp := f.listenerLP(cr.PairingID)
+	n, err := wire.ParseLocalpart(lp)
+	if err != nil || n.Kind != wire.KindStanding || n.Owner != "fcanela" || n.Pair == "" || n.Test {
+		t.Fatalf("listener name %q: %+v %v", lp, n, err)
+	}
+	if !strings.Contains(out[0], " as "+n.Pair+" (pairing "+cr.PairingID+"), ") ||
+		!strings.Contains(out[0], "Its listener account is "+lp+".") {
+		t.Fatalf("the bot reply does not name the listener account %s: %q", lp, out)
+	}
+	if f.hs.member(testRoom, mx(lp)) || f.state().Agents[lp] != nil {
+		t.Error("listener account made before the key was confirmed")
+	}
 	if cr.Owner != "fcanela" || !strings.HasPrefix(cr.OwnerKey, KeyPrefix) || len(cr.OwnerKey) != len(KeyPrefix)+43 ||
-		cr.RoomID != testRoom || cr.StandingUser != mx("agent.fcanela.listener") || cr.ServerName != testServer {
+		cr.RoomID != testRoom || cr.StandingUser != mx(lp) || cr.ServerName != testServer {
 		t.Fatalf("claim %+v", cr)
 	}
 	if c := f.callJSON("POST", wire.PathPairClaim, pr.Claim, struct{}{}, nil); c != 410 {
@@ -61,8 +72,12 @@ func TestPairingFlow(t *testing.T) {
 	if c := f.callJSON("POST", wire.PathStanding, cr.OwnerKey, struct{}{}, &sr); c != 200 {
 		t.Fatalf("standing: %d", c)
 	}
-	if sr.DeviceID != "KWAK-"+cr.PairingID || sr.UserID != mx("agent.fcanela.listener") {
+	if sr.DeviceID != "KWAK-"+cr.PairingID || sr.UserID != mx(lp) {
 		t.Errorf("standing %+v", sr)
+	}
+	if a := f.state().Agents[lp]; a == nil || a.Kind != wire.KindStanding || a.Pairing != cr.PairingID || !a.Open() ||
+		!f.hs.member(testRoom, mx(lp)) || f.hs.users[mx(lp)].display != lp {
+		t.Errorf("listener account after /standing: %+v", a)
 	}
 	if live := f.hs.live(sr.UserID); len(live) != 1 || live[0] != sr.AccessToken {
 		t.Errorf("standing tokens %v, want only %s", live, sr.AccessToken)
@@ -170,8 +185,13 @@ func TestRepairConfirmationMovesRecordsAndRevokesOld(t *testing.T) {
 	if got := f.hs.live(open.UserID); len(got) != 1 || got[0] != tokensBefore[0] || got[0] != open.AccessToken {
 		t.Errorf("the live agent's token changed: %v, had %s", got, open.AccessToken)
 	}
-	if f.hs.live(mx("agent.fcanela.listener")) == nil {
-		t.Error("standing account lost every token")
+	// A same-kind re-pair keeps the listener account and its name: it moved to the new pairing,
+	// and only the old pairing's device left it.
+	if lp := f.listenerLP(cr.PairingID); lp != f.listenerLP(old.id) || st.Agents[lp].Pairing != cr.PairingID || !st.Agents[lp].Open() {
+		t.Errorf("listener account after the re-pair: %s %+v, old %s", lp, st.Agents[lp], f.listenerLP(old.id))
+	}
+	if f.hs.live(f.listenerUID(cr.PairingID)) == nil || f.deviceTokens(f.listenerUID(cr.PairingID), "KWAK-"+old.id) != nil {
+		t.Error("listener account lost every token, or kept the old pairing's device")
 	}
 	if c := f.callJSON("POST", wire.PathStanding, old.key, struct{}{}, nil); c != 401 {
 		t.Errorf("old key after the re-pair: %d", c)

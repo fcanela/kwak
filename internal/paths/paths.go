@@ -22,6 +22,25 @@ const (
 // SocketName is the file name of the socket inside its directory.
 const SocketName = "kwak.sock"
 
+// Folder names (decision 40). A dev build uses DevName where a release uses Name, for the config
+// dir, the state dir and the socket's dir, so a kwak built to work on kwak never reads or writes
+// a real pairing unless the developer points it there with the overrides above.
+const (
+	Name    = "kwak"
+	DevName = "kwak-dev"
+)
+
+// flavor is "dev" only in a dev build. make dev sets it at link time:
+//
+//	go build -ldflags "-X github.com/fcanela/kwak/internal/paths.flavor=dev" ./cmd/kwak
+//
+// go install and the Nix package never pass -X, so their binaries are never dev builds. Tests do
+// not change it: they build sys with dev set (current() reads it once).
+var flavor string
+
+// Dev reports whether this binary is a dev build (make dev).
+func Dev() bool { return flavor == "dev" }
+
 // ConfigDir is the directory of config.json.
 func ConfigDir() (string, error) { return current().configDir() }
 
@@ -42,6 +61,15 @@ type sys struct {
 	userConfig   string // os.UserConfigDir()
 	localAppData string
 	runUser      string // "/run/user/<uid>" when it exists, is a real dir and is ours; else ""
+	dev          bool   // a dev build: every default folder is DevName instead of Name
+}
+
+// name is the folder name of this build's dirs.
+func (s sys) name() string {
+	if s.dev {
+		return DevName
+	}
+	return Name
 }
 
 func (s sys) override(name string) (string, bool, error) {
@@ -70,7 +98,7 @@ func (s sys) defaultConfigDir() (string, error) {
 		if s.userConfig == "" {
 			return "", errors.New("paths: no config dir; set HOME")
 		}
-		return filepath.Join(s.userConfig, "kwak"), nil
+		return filepath.Join(s.userConfig, s.name()), nil
 	}
 }
 
@@ -87,7 +115,7 @@ func (s sys) stateDir() (string, error) {
 		if s.home == "" {
 			return "", errors.New("paths: no state dir; set HOME")
 		}
-		return filepath.Join(s.home, ".local", "state", "kwak"), nil
+		return filepath.Join(s.home, ".local", "state", s.name()), nil
 	}
 }
 
@@ -109,13 +137,13 @@ func (s sys) socketPath() (string, error) {
 	var dir string
 	switch {
 	case s.goos == "linux" && s.runUser != "":
-		dir = filepath.Join(s.runUser, "kwak")
+		dir = filepath.Join(s.runUser, s.name())
 	case s.home == "":
 		return "", errors.New("paths: no home dir for the socket; set HOME")
 	case s.goos == "darwin":
-		dir = filepath.Join(s.home, "Library", "Caches", "kwak")
+		dir = filepath.Join(s.home, "Library", "Caches", s.name())
 	default:
-		dir = filepath.Join(s.home, ".cache", "kwak")
+		dir = filepath.Join(s.home, ".cache", s.name())
 	}
 	return s.fit(filepath.Join(dir, SocketName))
 }
@@ -124,11 +152,12 @@ func (s sys) local() (string, error) {
 	if s.localAppData == "" {
 		return "", errors.New("paths: %LOCALAPPDATA% is not set")
 	}
-	return filepath.Join(s.localAppData, "kwak"), nil
+	return filepath.Join(s.localAppData, s.name()), nil
 }
 
-// fit falls back to the shared /tmp/kwak-<uid> when path does not fit in a sockaddr_un. It is
-// literal /tmp, not TMPDIR, so every process of the user agrees on it.
+// fit falls back to the shared /tmp/kwak-<uid> (/tmp/kwak-dev-<uid> in a dev build) when path
+// does not fit in a sockaddr_un. It is literal /tmp, not TMPDIR, so every process of the user
+// agrees on it.
 func (s sys) fit(path string) (string, error) {
 	if len(path) <= MaxSocketPath(s.goos) {
 		return path, nil
@@ -136,7 +165,7 @@ func (s sys) fit(path string) (string, error) {
 	if s.uid == "" {
 		return "", fmt.Errorf("paths: socket path %q is too long and the uid is unknown", path)
 	}
-	return "/tmp/kwak-" + s.uid + "/" + SocketName, nil
+	return "/tmp/" + s.name() + "-" + s.uid + "/" + SocketName, nil
 }
 
 // MaxSocketPath is the longest socket path Go's net package accepts on goos: sun_path less its
@@ -149,7 +178,7 @@ func MaxSocketPath(goos string) int {
 }
 
 func baseSys(goos string) sys {
-	s := sys{goos: goos, getenv: os.Getenv}
+	s := sys{goos: goos, getenv: os.Getenv, dev: Dev()}
 	s.home, _ = os.UserHomeDir()
 	s.userConfig, _ = os.UserConfigDir()
 	return s

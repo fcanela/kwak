@@ -22,7 +22,12 @@ import (
 	"github.com/fcanela/kwak/internal/wire/wiretest"
 )
 
-var keyName = secrets.OwnerKeyName(wiretest.ServerName)
+// Keyring items (decision 40): the old shared name an older kwak wrote, and the item of the
+// pairing the fake registrar hands out.
+var (
+	legacyKeyName = secrets.OwnerKeyName(wiretest.ServerName)
+	keyName       = secrets.PairingKeyName(wiretest.ServerName, wiretest.PairingID)
+)
 
 // fakeRegistrar answers /_kwak/v1 like the registrar, from a script.
 type fakeRegistrar struct {
@@ -35,6 +40,13 @@ type fakeRegistrar struct {
 	standing int      // status of /standing
 	unpair   int      // status of /unpair
 	me       int      // status of /me
+	test     bool     // the claim is for a test pairing (decision 40)
+	pairing  string   // pairing id in the claim; wiretest.PairingID when empty
+	// replaced is set when a /pair carried OldOwnerKey and the claim is a normal pairing, and
+	// confirmed once /standing took the new key: then OldOwnerKey is revoked, as the registrar
+	// revokes a replaced pairing (a pairing of the other kind is a new one, decision 41, so a test claim
+	// replaces nothing).
+	replaced, confirmed bool
 }
 
 func (f *fakeRegistrar) handler(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +74,7 @@ func (f *fakeRegistrar) handler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(429)
 			return
 		}
+		f.replaced = bearer == wiretest.OldOwnerKey
 		write(status, wire.PairResponse{Code: wiretest.PairCode, Claim: wiretest.Claim, Bot: wiretest.Bot,
 			ExpiresAt: at("2026-11-02T10:15:00Z"), Replaces: bearer == wiretest.OldOwnerKey})
 	case wire.PathPairClaim:
@@ -82,17 +95,22 @@ func (f *fakeRegistrar) handler(w http.ResponseWriter, r *http.Request) {
 		if owner == "" {
 			owner = wiretest.Owner
 		}
-		write(200, wire.ClaimResponse{Status: wire.ClaimPaired, Owner: owner, PairingID: wiretest.PairingID,
+		pairing := f.pairing
+		if pairing == "" {
+			pairing = wiretest.PairingID
+		}
+		write(200, wire.ClaimResponse{Status: wire.ClaimPaired, Owner: owner, PairingID: pairing,
 			OwnerKey: wiretest.OwnerKey, KeyExpiresAt: at("2027-01-31T10:05:00Z"), RoomID: wiretest.RoomID,
-			StandingUser: wiretest.StandingUser, ServerName: wiretest.ServerName})
+			StandingUser: wiretest.StandingUser, ServerName: wiretest.ServerName, Test: f.test})
 	case wire.PathStanding:
 		if f.standing != 0 && f.standing != 200 {
 			apiErr(f.standing, wire.ErrHomeserver)
 			return
 		}
+		f.confirmed = f.confirmed || bearer == wiretest.OwnerKey
 		write(200, wire.Standing{UserID: wiretest.StandingUser, AccessToken: wiretest.StandingToken, DeviceID: "KWAK-" + wiretest.PairingID})
 	case wire.PathMe:
-		if f.me == 401 {
+		if f.me == 401 || bearer == wiretest.OldOwnerKey && f.replaced && f.confirmed && !f.test {
 			apiErr(401, wire.ErrBadKey)
 			return
 		}
@@ -210,11 +228,15 @@ type rig struct {
 	cli      *CLI
 }
 
-func newRig(t *testing.T) *rig {
+func newRig(t *testing.T) *rig { return newRigOn(t, secretstest.Mem(), false) }
+
+// newRigOn is a rig over keys, which another rig may share as two pairings on one machine share
+// the OS keyring. dev builds the CLI of a dev build (make dev).
+func newRigOn(t *testing.T, keys *secretstest.Memory, dev bool) *rig {
 	r := &rig{
 		t:        t,
 		reg:      &fakeRegistrar{},
-		keys:     secretstest.Mem(),
+		keys:     keys,
 		svc:      &fakeService{},
 		ln:       &fakeListener{replies: map[string][]string{}},
 		clock:    &fakeClock{now: at("2026-11-02T10:05:00Z")},
@@ -244,6 +266,7 @@ func newRig(t *testing.T) *rig {
 		Executable: func() (string, error) { return "/home/u/go/bin/kwak", nil },
 		Now:        r.clock.Now,
 		Sleep:      r.clock.Sleep,
+		Dev:        dev,
 	})
 	return r
 }
@@ -258,19 +281,21 @@ func (r *rig) pair(args ...string) (int, string, string) {
 	return r.run(r.cli.Pair, "", append([]string{"--server", r.srv.URL}, args...)...)
 }
 
-// paired writes the state of a machine paired before with OldOwnerKey as pairing OldPairingID.
+// paired writes the state of a machine paired by an older kwak with OldOwnerKey as pairing
+// OldPairingID: no keyring_user in config.json, and the key under the old shared name.
 func (r *rig) paired() {
 	r.t.Helper()
 	data := `{"version":1,"server":"` + r.srv.URL + `","server_name":"kwak.test","owner":"fcanela","machine":"laptop",` +
 		`"pairing_id":"` + wiretest.OldPairingID + `","room_id":"!a1B2c3D4","standing_user":"` + wiretest.StandingUser + `",` +
-		`"resume_max":3,"resume_exe":{"claude":"/opt/claude"},"future_field":{"x":1}}`
+		`"resume_max":3,"resume_exe":{"claude":"/opt/claude"},"thread_ceiling":7,"resume_per_hour":40,"check_outgoing":"/opt/out.sh","check_incoming":"/opt/in.sh",` +
+		`"future_field":{"x":1}}`
 	if err := os.MkdirAll(r.cfgDir, 0o700); err != nil {
 		r.t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(r.cfgDir, ConfigFile), []byte(data), 0o600); err != nil {
 		r.t.Fatal(err)
 	}
-	if err := r.keys.Set(keyName, wiretest.OldOwnerKey); err != nil {
+	if err := r.keys.Set(legacyKeyName, wiretest.OldOwnerKey); err != nil {
 		r.t.Fatal(err)
 	}
 }
@@ -288,12 +313,31 @@ func (r *rig) config() map[string]any {
 	return m
 }
 
+// key is the owner key the machine uses now: the one in the item config.json names, or, with no
+// config.json, any owner key item left behind ("" when there is none).
 func (r *rig) key() string {
-	v, err := r.keys.Get(keyName)
+	name := ""
+	if cfg, err := loadConfig(r.cfgDir, true); err == nil {
+		name = cfg.KeyName()
+	} else if items := r.ownerItems(); len(items) > 0 {
+		name = items[0]
+	}
+	v, err := r.keys.Get(name)
 	if err != nil {
 		return ""
 	}
 	return v
+}
+
+// ownerItems lists the owner key items in the keyring, sorted.
+func (r *rig) ownerItems() []string {
+	var out []string
+	for _, k := range r.keys.Items() {
+		if strings.HasSuffix(k, "/owner-key") {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 func (r *rig) noProbe() {
@@ -326,11 +370,14 @@ func TestPairFirst(t *testing.T) {
 	if r.key() != wiretest.OwnerKey {
 		t.Errorf("keyring holds %q", r.key())
 	}
+	if items := r.ownerItems(); len(items) != 1 || items[0] != keyName {
+		t.Errorf("keyring items %v, want only %s", items, keyName)
+	}
 	r.noProbe()
 	cfg := r.config()
 	want := map[string]any{"version": 1.0, "server": r.srv.URL, "server_name": "kwak.test", "owner": "fcanela",
 		"machine": "laptop", "pairing_id": "3f9a1c2e", "room_id": "!a1B2c3D4", "standing_user": wiretest.StandingUser,
-		"resume_max": 2.0}
+		"resume_max": 10.0, "keyring_user": "kwak.test/3f9a1c2e/owner-key"}
 	for k, v := range want {
 		if cfg[k] != v {
 			t.Errorf("config %s = %v, want %v", k, cfg[k], v)
@@ -533,8 +580,16 @@ func TestRepair(t *testing.T) {
 	if r.key() != wiretest.OwnerKey {
 		t.Errorf("key %q", r.key())
 	}
+	// The machine moves from the old shared item to its pairing's own item; the old one goes.
+	if items := r.ownerItems(); len(items) != 1 || items[0] != keyName {
+		t.Errorf("keyring items %v, want only %s", items, keyName)
+	}
 	cfg := r.config()
-	if cfg["pairing_id"] != wiretest.PairingID || cfg["resume_max"] != 3.0 || cfg["future_field"] == nil {
+	if cfg["keyring_user"] != keyName {
+		t.Errorf("keyring_user %v", cfg["keyring_user"])
+	}
+	if cfg["pairing_id"] != wiretest.PairingID || cfg["resume_max"] != 3.0 || cfg["thread_ceiling"] != 7.0 || cfg["resume_per_hour"] != 40.0 || cfg["future_field"] == nil ||
+		cfg["check_outgoing"] != "/opt/out.sh" || cfg["check_incoming"] != "/opt/in.sh" {
 		t.Errorf("config %v", cfg)
 	}
 	if exe, _ := cfg["resume_exe"].(map[string]any); exe["claude"] != "/opt/claude" {
@@ -814,7 +869,7 @@ func TestUnpairKeyAlreadyRevoked(t *testing.T) {
 func TestUnpairKeyMissing(t *testing.T) {
 	r := newRig(t)
 	r.paired()
-	r.keys.Delete(keyName)
+	r.keys.Delete(legacyKeyName)
 	if code, _, errs := r.run(r.cli.Unpair, ""); code != 1 || !strings.Contains(errs, "--force") {
 		t.Fatalf("exit %d: %s", code, errs)
 	}

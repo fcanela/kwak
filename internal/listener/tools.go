@@ -226,8 +226,8 @@ func checkText(text string, to []string, as string) string {
 		return fmt.Sprintf("the text has %d characters; the limit is %d", n, maxText)
 	case len(to) > maxTo:
 		return fmt.Sprintf("'to' has %d entries; the limit is %d", len(to), maxTo)
-	case as != "" && !wire.HelperName.MatchString(as):
-		return "'as' must be a helper name"
+	case as != "" && !wire.ValidHelper(as):
+		return "'as' must be a helper name (not \"listener\", which is reserved)"
 	}
 	return ""
 }
@@ -235,7 +235,7 @@ func checkText(text string, to []string, as string) string {
 var localpart = regexp.MustCompile(`^[a-z0-9._=/+-]+$`)
 
 // normalizeTo turns user ids and localparts into local mxids (spec 6.4). Any local account may be
-// mentioned (Q10 a).
+// named; only agents are mentioned (splitAgents, decision 38).
 func (l *Listener) normalizeTo(to []string) ([]string, string) {
 	sn := l.serverName()
 	var out []string
@@ -249,6 +249,11 @@ func (l *Listener) normalizeTo(to []string) ([]string, string) {
 		if !localpart.MatchString(lp) {
 			return nil, "kwak cannot read the user id " + render.Sanitize(raw)
 		}
+		// The agent namespace is kwak's (spec 3.7): an id there that has none of the shapes of 3.6 is
+		// a typo or a cut-off name, not a person, so it is refused instead of being sent unmentioned.
+		if _, err := wire.ParseLocalpart(lp); err != nil && wire.InAgentNamespace(lp) {
+			return nil, render.Sanitize(raw) + " is not a valid agent id: an agent id looks like agent.<owner>.<hex>, with 16 to 32 hex digits"
+		}
 		id := "@" + lp + ":" + sn
 		if !seen[id] {
 			seen[id] = true
@@ -256,6 +261,36 @@ func (l *Listener) normalizeTo(to []string) ([]string, string) {
 		}
 	}
 	return out, ""
+}
+
+// isAgent reports whether a user id is an agent account: its localpart has one of the agent
+// shapes of spec 3.6. Any other account is a person (or the registrar bot).
+func isAgent(id string) bool {
+	lp, _, _ := strings.Cut(strings.TrimPrefix(id, "@"), ":")
+	_, err := wire.ParseLocalpart(lp)
+	return err == nil
+}
+
+// splitAgents splits ids into agents, whom kwak mentions, and persons, whom it never pings
+// (decision 38, spec 6.4).
+func splitAgents(ids []string) (agents, persons []string) {
+	for _, id := range ids {
+		if isAgent(id) {
+			agents = append(agents, id)
+		} else {
+			persons = append(persons, id)
+		}
+	}
+	return agents, persons
+}
+
+// personLines says, one line each, that kwak did not mention the persons named in 'to'.
+func (l *Listener) personLines(persons []string) string {
+	var b strings.Builder
+	for _, id := range persons {
+		b.WriteString(l.short(id) + " is a person: kwak does not ping people.\n")
+	}
+	return b.String()
 }
 
 func sendErrText(sn string, err error) string {
@@ -302,28 +337,29 @@ func (l *Listener) roomIDLocked() string {
 	return l.roomID()
 }
 
-// joined is the agents room's member list, cached 60 s (spec 5.9). nil when unknown.
-func (l *Listener) joined(ctx context.Context) map[string]bool {
+// joined is the agents room's member list, cached 60 s (spec 5.9). nil when unknown. cached says
+// the list came from the cache; force skips the cache.
+func (l *Listener) joined(ctx context.Context, force bool) (in map[string]bool, cached bool) {
 	l.mu.Lock()
 	now := l.d.Clock.Now()
-	if l.members != nil && now.Sub(l.membAt) < membersTTL {
+	if !force && l.members != nil && now.Sub(l.membAt) < membersTTL {
 		m := l.members
 		l.mu.Unlock()
-		return toSet(m)
+		return toSet(m), true
 	}
 	tok, room := l.standing, l.roomID()
 	l.mu.Unlock()
 	if tok == "" {
-		return nil
+		return nil, false
 	}
 	ids, err := l.d.Matrix(tok).JoinedMembers(ctx, room)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	l.mu.Lock()
-	l.members, l.membAt = ids, now
+	l.members, l.membAt, l.membGone = ids, now, nil
 	l.mu.Unlock()
-	return toSet(ids)
+	return toSet(ids), false
 }
 
 func toSet(ids []string) map[string]bool {
@@ -334,13 +370,50 @@ func toSet(ids []string) map[string]bool {
 	return m
 }
 
+// unchecked says some id is missing from in and no fresh list has confirmed it gone yet.
+func (l *Listener) unchecked(in map[string]bool, ids []string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, id := range ids {
+		if !in[id] && !l.membGone[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// markGone records the ids a freshly fetched list lacks.
+func (l *Listener) markGone(in map[string]bool, ids []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, id := range ids {
+		if !in[id] {
+			if l.membGone == nil {
+				l.membGone = map[string]bool{}
+			}
+			l.membGone[id] = true
+		}
+	}
+}
+
 func (l *Listener) memberLines(ctx context.Context, ids []string) string {
 	if len(ids) == 0 {
 		return ""
 	}
-	in := l.joined(ctx)
+	in, cached := l.joined(ctx, false)
 	if in == nil {
 		return ""
+	}
+	// An agent created after the cached list would show as gone (PoC 2026-11-11), so a miss
+	// fetches the list once more. An id a fresh list already lacked does not fetch again until
+	// the cache expires (spec 5.9).
+	if cached && l.unchecked(in, ids) {
+		if fresh, _ := l.joined(ctx, true); fresh != nil {
+			in, cached = fresh, false
+		}
+	}
+	if !cached {
+		l.markGone(in, ids)
 	}
 	var b strings.Builder
 	for _, id := range ids {
@@ -371,20 +444,36 @@ func (l *Listener) toolSend(ctx context.Context, s *session, req wire.ToolReques
 	if e != "" {
 		return fail(e)
 	}
-	ev, uid, e := l.send(ctx, s.Key, helper, message{MsgType: "m.text", Body: a.Text, Mentions: mentions{to}})
+	if e := l.outgoing(ctx, s, helper, wire.ToolSend, "", a.Text); e != "" {
+		return fail(e)
+	}
+	agents, persons := splitAgents(to)
+	ev, uid, e := l.send(ctx, s.Key, helper, message{MsgType: "m.text", Body: a.Text, Mentions: mentions{agents}})
 	if e != "" {
 		return fail(e)
 	}
 	now := l.d.Clock.Now()
 	l.mu.Lock()
 	l.st.Roots[ev] = uid
-	if len(to) > 0 {
-		l.st.Questions[ev] = &question{Asker: uid, Session: s.Key, Helper: helper, AskedAt: now, Due: now.Add(l.questionTimeoutLocked())}
+	// Open questions have their own map, so an older kwak restored over state.json does not give
+	// them the text for questions with mentions. A send that names only persons mentions nobody,
+	// so the room reads it as an open question, and so does the no-reply notice.
+	qs := l.st.Questions
+	if len(agents) == 0 {
+		qs = l.st.OpenQs
 	}
+	qs[ev] = &question{Asker: uid, Session: s.Key, Helper: helper, AskedAt: now, Due: now.Add(l.questionTimeoutLocked())}
 	l.saveLocked()
 	l.mu.Unlock()
-	return result{text: "Sent as " + l.short(uid) + " in thread " + ev + ".\n" + l.memberLines(ctx, to) + textNoPoll}
+	text := "Sent as " + l.short(uid) + " in thread " + ev + ".\n" + l.personLines(persons)
+	if len(persons) > 0 && len(agents) == 0 {
+		text += textOpenNoAgent
+	}
+	return result{text: text + l.memberLines(ctx, agents) + textNoPoll}
 }
+
+// textOpenNoAgent ends a send whose 'to' named only persons: it mentions nobody.
+const textOpenNoAgent = "No agent is mentioned, so it is an open question for volunteering agents.\n"
 
 func (l *Listener) questionTimeoutLocked() time.Duration {
 	if l.st.Settings != nil {
@@ -419,6 +508,9 @@ func (l *Listener) toolReply(ctx context.Context, s *session, req wire.ToolReque
 	if e != "" {
 		return fail(e)
 	}
+	if e := l.outgoing(ctx, s, helper, wire.ToolReply, a.Thread, a.Text); e != "" {
+		return fail(e)
+	}
 	uid, _, e := l.token(ctx, s.Key, helper)
 	if e != "" {
 		return fail(e)
@@ -434,21 +526,19 @@ func (l *Listener) toolReply(ctx context.Context, s *session, req wire.ToolReque
 	if err != nil {
 		return l.readErr(a.Thread, err)
 	}
-	latest, latestOther := root.EventID, ""
-	if replies, err := m.ThreadReplies(ctx, room, root.EventID, maxReplies); err == nil {
-		for i, r := range replies {
-			if i == 0 {
-				latest = r.EventID
-			}
-			if latestOther == "" && r.Sender != uid {
-				latestOther = r.Sender
-			}
-		}
+	latest := root.EventID
+	if replies, err := m.ThreadReplies(ctx, room, root.EventID, maxReplies); err == nil && len(replies) > 0 {
+		latest = replies[0].EventID
 	}
+	// Address on purpose (spec 6.4): the thread's starter and 'to' only. Earlier writers are not
+	// mentioned, so a "thanks" that names nobody wakes nobody but the starter. Only agents are
+	// mentioned (decision 38): a person who started the thread is not pinged, and a person in
+	// 'to' gets a line in the result instead.
+	agents, persons := splitAgents(to)
 	var ment []string
 	seen := map[string]bool{uid: true}
-	for _, id := range append([]string{root.Sender, latestOther}, to...) {
-		if id != "" && !seen[id] {
+	for _, id := range append([]string{root.Sender}, agents...) {
+		if id != "" && !seen[id] && isAgent(id) {
 			seen[id] = true
 			ment = append(ment, id)
 		}
@@ -463,6 +553,7 @@ func (l *Listener) toolReply(ctx context.Context, s *session, req wire.ToolReque
 	l.st.Threads[root.EventID] = Thread{Latest: ev, TS: l.d.Clock.Now().UnixMilli()}
 	l.dirty = true
 	l.mu.Unlock()
+	l.answered(s.Key, helper, root.EventID)
 	text := "Replied as " + l.short(uid) + " in thread " + root.EventID
 	if len(ment) > 0 {
 		shorts := make([]string, len(ment))
@@ -471,7 +562,7 @@ func (l *Listener) toolReply(ctx context.Context, s *session, req wire.ToolReque
 		}
 		text += ", mentioning " + strings.Join(shorts, ", ")
 	}
-	return result{text: text + ".\n" + l.memberLines(ctx, ment) + textNoPoll}
+	return result{text: text + ".\n" + l.personLines(persons) + l.memberLines(ctx, ment) + textNoPoll}
 }
 
 // threadRoot fetches id, and its thread root when id is itself in a thread, so kwak never starts a
@@ -610,8 +701,8 @@ func (l *Listener) toolHelper(ctx context.Context, s *session, req wire.ToolRequ
 	var a struct {
 		Name string `json:"name"`
 	}
-	if json.Unmarshal(raw, &a) != nil || !wire.HelperName.MatchString(a.Name) {
-		return fail("'name' must match ^[a-z][a-z0-9-]{0,23}$")
+	if json.Unmarshal(raw, &a) != nil || !wire.ValidHelper(a.Name) {
+		return fail("'name' must match ^[a-z][a-z0-9-]{0,23}$ and must not be \"listener\", which is reserved")
 	}
 	if _, _, e := l.token(ctx, s.Key, ""); e != "" {
 		return fail(e)

@@ -706,3 +706,29 @@ func TestWriteFollowsSymlinks(t *testing.T) {
 		t.Fatalf("dangling link: exit %d %q", code, errOut)
 	}
 }
+
+// A dev build writes or removes Codex's config only in a CODEX_HOME that was set, never in the
+// default ~/.codex of the real kwak (decision 40). Printing the steps still works.
+func TestDevBuildCodexHome(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, ".codex")
+	for _, mode := range []string{"--write", "--remove"} {
+		code, _, errOut := runSetup(t, env{codexHome: home, exe: exe, goos: "linux", dev: true}, "codex", mode)
+		if code != 1 || !strings.Contains(errOut, "CODEX_HOME you set") {
+			t.Fatalf("%s: exit %d: %s", mode, code, errOut)
+		}
+	}
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatalf("the default Codex home was touched: %v", err)
+	}
+	if code, out, _ := runSetup(t, env{codexHome: home, exe: exe, goos: "linux", dev: true}, "codex"); code != 0 || !strings.Contains(out, "[mcp_servers.kwak]") {
+		t.Fatalf("print: exit %d: %s", code, out)
+	}
+	code, _, errOut := runSetup(t, env{codexHome: home, exe: exe, goos: "linux", dev: true, homeSet: true}, "codex", "--write")
+	if code != 0 {
+		t.Fatalf("explicit CODEX_HOME: exit %d: %s", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(home, "config.toml")); err != nil {
+		t.Fatal(err)
+	}
+}

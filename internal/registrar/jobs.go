@@ -22,6 +22,8 @@ func (s *Server) RunJobs(ctx context.Context) error {
 	defer retry.Stop()
 	flush := time.NewTicker(flushEvery)
 	defer flush.Stop()
+	side := time.NewTicker(roomRetry)
+	defer side.Stop()
 	s.runJobs(ctx)
 	for {
 		select {
@@ -38,6 +40,8 @@ func (s *Server) RunJobs(ctx context.Context) error {
 			if err := s.Store.Flush(); err != nil {
 				s.Log.Error("flush", "err", err)
 			}
+		case <-side.C:
+			s.joinSideRooms(ctx, false)
 		}
 	}
 }
@@ -46,6 +50,7 @@ func (s *Server) runJobs(ctx context.Context) {
 	now := s.now()
 	s.idleClose(ctx, now)
 	s.keyJobs(ctx, now)
+	s.listenerJobs(ctx)
 	s.retryCleanups(ctx)
 	s.prune(now)
 	s.adminDMs(ctx)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/fcanela/kwak/internal/matrix"
@@ -57,7 +58,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request, c caller) 
 		writeErr(w, newErr(wire.ErrBadSession, "session id is not a UUID"))
 		return
 	}
-	if req.Helper != "" && !wire.HelperName.MatchString(req.Helper) {
+	if req.Helper != "" && !wire.ValidHelper(req.Helper) { // "listener" is reserved (decision 42)
 		writeErr(w, newErr(wire.ErrBadRequest, "bad helper name"))
 		return
 	}
@@ -77,11 +78,14 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request, c caller) 
 // ensureAgent is POST /agents after validation, under the session's lock (spec 3.4).
 func (s *Server) ensureAgent(ctx context.Context, c caller, key sessionKey, requestID string) (wire.Agent, *wire.APIError) {
 	now := s.now()
-	var parent, lp, room string
+	var parent, lp string
 	var rec *Agent
-	var e *wire.APIError
+	// A test pairing's agents live in the test room, never in the agents room (decision 39).
+	room, e := s.agentsRoom(ctx, c.test)
+	if e != nil {
+		return wire.Agent{}, e
+	}
 	s.Store.View(func(st *State) {
-		room = st.RoomID
 		if e = st.pairingErr(c.pairing, now); e != nil {
 			return
 		}
@@ -298,13 +302,13 @@ func (s *Server) reopen(ctx context.Context, lp, room string) (matrix.Login, *wi
 	return s.finishPending(ctx, lp, room)
 }
 
-// setup resets the display name (tuwunel adds a suffix at register) and joins the room. On a
-// failure the agent is closed again (spec 3.4 step 5).
+// setup resets the display name (tuwunel adds a suffix at register) and joins the room of the
+// pairing's kind. On a failure the agent is closed again (spec 3.4 step 5).
 func (s *Server) setup(ctx context.Context, lp, room string) *wire.APIError {
 	uid := s.Cfg.mxid(lp)
 	err := s.HS.SetDisplayName(ctx, uid, lp)
 	if err == nil {
-		err = s.HS.JoinAs(ctx, uid, room)
+		err = s.joinOrInvite(ctx, uid, room)
 	}
 	if err == nil {
 		return nil
@@ -399,17 +403,19 @@ func doneErr(err error) bool {
 	return false
 }
 
-// cleanup leaves the room and logs every device out; the jobs retry it until both succeed. The
-// caller holds the agent's lock.
+// cleanup leaves the room of the agent's kind and its report room, and logs every device out; the
+// jobs retry it until all succeed. The caller holds the agent's lock.
 func (s *Server) cleanup(ctx context.Context, lp string) {
 	uid := s.Cfg.mxid(lp)
-	room := s.roomID()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), callTimeout)
 	defer cancel()
-	err1 := s.HS.LeaveAs(ctx, uid, room)
-	if err1 != nil && doneErr(err1) {
-		err1 = nil
-	}
+	test := false
+	s.Store.View(func(st *State) {
+		if a := st.Agents[lp]; a != nil {
+			test = st.recordTest(lp, a)
+		}
+	})
+	err1 := s.leaveKind(ctx, uid, test)
 	err2 := s.HS.LogoutAll(ctx, uid)
 	if err2 != nil && doneErr(err2) {
 		err2 = nil
@@ -426,6 +432,32 @@ func (s *Server) cleanup(ctx context.Context, lp string) {
 	})
 }
 
+// leaveKind leaves the room an account of this kind lives in, then the report room of its kind:
+// the listener leaves that one itself after a report, but its leave may have failed. The room of
+// the kind comes first and never waits for the report room, so a closed agent always leaves the
+// room whose member list tells askers it is gone (decision 6). A room of the kind that is not
+// joined yet is an error, so the jobs try again. A report room that is not configured, or not
+// joined yet, is skipped: an account can be in it only through a join that needed its id. A leave
+// of a room the account is not in counts as done (doneErr).
+func (s *Server) leaveKind(ctx context.Context, uid string, test bool) error {
+	main, e := s.agentsRoom(ctx, test)
+	switch {
+	case e != nil: // a test record on a server whose config no longer has a test room
+	case main == "":
+		return errors.New("room not joined yet")
+	default:
+		if err := s.HS.LeaveAs(ctx, uid, main); err != nil && !doneErr(err) {
+			return err
+		}
+	}
+	if id, _ := s.sideID(ctx, reportKey(test)); id != "" {
+		if err := s.HS.LeaveAs(ctx, uid, id); err != nil && !doneErr(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 // revoke revokes a pairing (spec 3.9): state, the standing device, then its agents (I9).
 func (s *Server) revoke(ctx context.Context, id, reason string) error {
 	now := s.now()
@@ -440,8 +472,10 @@ func (s *Server) revoke(ctx context.Context, id, reason string) error {
 		if p.Revoked == nil {
 			p.Revoked, p.RevokeReason, p.LogoutDone = &now, reason, false
 		}
+		// Its agents, helpers and its own listener account (decision 42). A listener account a
+		// re-pair moved away has the new pairing's id and stays.
 		for lp, a := range st.Agents {
-			if a.Pairing == id && a.Kind != wire.KindStanding && a.Closed == nil {
+			if a.Pairing == id && a.Closed == nil {
 				lps = append(lps, lp)
 			}
 		}
@@ -452,21 +486,34 @@ func (s *Server) revoke(ctx context.Context, id, reason string) error {
 	}
 	s.Log.Info("pairing revoked", "pairing", id, "reason", reason)
 	s.logoutStandingDevice(ctx, owner, id)
+	sort.Strings(lps)
 	_, err = s.closeAgents(ctx, lps, "revoked", "", nil)
 	return err
 }
 
 // logoutStandingDevice takes the lock of POST /standing, so a login there either sees the revoke
-// or comes before this logout.
+// or comes before this logout. The device KWAK-<id> belongs to the pairing's listener account
+// (which a re-pair may have moved to the new pairing). A pairing with no listener name never called
+// POST /standing on a build with decision 42: its device, if any, is on an old per-owner standing
+// account, which the job pass closes with every device (closeLegacy), so there is nothing to log
+// out here. The logout is done only when it worked; the jobs retry it otherwise.
 func (s *Server) logoutStandingDevice(ctx context.Context, owner, id string) {
 	unlock := s.lock("standing|" + owner)
 	defer unlock()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), callTimeout)
 	defer cancel()
-	err := s.HS.LogoutDevice(ctx, s.Cfg.mxid(wire.StandingLocalpart(owner)), "KWAK-"+id)
-	if err != nil && !doneErr(err) {
-		s.Log.Warn("standing device logout failed, will retry", "pairing", id, "err", err)
-		return
+	var lp string
+	s.Store.View(func(st *State) {
+		if p := st.Pairings[id]; p != nil {
+			lp = p.Listener
+		}
+	})
+	if lp != "" {
+		err := s.HS.LogoutDevice(ctx, s.Cfg.mxid(lp), "KWAK-"+id)
+		if err != nil && !doneErr(err) {
+			s.Log.Warn("standing device logout failed, will retry", "pairing", id, "account", lp, "err", err)
+			return
+		}
 	}
 	s.Store.Update(func(st *State) error {
 		if p := st.Pairings[id]; p != nil {

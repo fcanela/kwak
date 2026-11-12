@@ -1,5 +1,5 @@
-// Package listener is the kwak daemon (spec 5): one /sync per machine as the owner's standing
-// account, routing to local sessions, per-session inboxes, the local IPC server and the tools.
+// Package listener is the kwak daemon (spec 5): one /sync per machine as its pairing's own listener
+// account (the standing account, decision 42), routing to local sessions, per-session inboxes, the local IPC server and the tools.
 package listener
 
 import (
@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fcanela/kwak/internal/check"
 	"github.com/fcanela/kwak/internal/matrix"
 	"github.com/fcanela/kwak/internal/proc"
 	"github.com/fcanela/kwak/internal/secrets"
@@ -34,6 +35,9 @@ type Registrar interface {
 	Alive(ctx context.Context, userIDs []string, touch bool) (unknown, closed []string, err error)
 	Me(ctx context.Context) (wire.Me, error)
 	Unpair(ctx context.Context) error
+	// ReportJoin joins userID, one of this pairing's own accounts, to the pairing's report room
+	// and returns the room id (5.17). wire.ErrNoReportRoom when the server has none for it.
+	ReportJoin(ctx context.Context, userID string) (roomID string, err error)
 }
 
 // KeySetter is implemented by a Registrar that takes its owner key from the listener. The listener
@@ -44,10 +48,12 @@ type KeySetter interface{ SetKey(ownerKey string) }
 type Matrix interface {
 	Sync(ctx context.Context, since, filter string, timeout time.Duration) (*matrix.SyncResponse, error)
 	Send(ctx context.Context, roomID, txnID string, content any) (string, error)
+	React(ctx context.Context, roomID, txnID, eventID, key string) (string, error)
 	Messages(ctx context.Context, roomID, from string, limit int, filter string) (*matrix.MessagesResponse, error)
 	Event(ctx context.Context, roomID, eventID string) (*matrix.Event, error)
 	ThreadReplies(ctx context.Context, roomID, rootID string, limit int) ([]matrix.Event, error)
 	JoinedMembers(ctx context.Context, roomID string) ([]string, error)
+	Leave(ctx context.Context, roomID string) error // after a report (5.17)
 }
 
 // Runner starts a background resume; os/exec in production. Cancelling ctx kills the run.
@@ -69,6 +75,7 @@ type Deps struct {
 	Procs     proc.Reader
 	PeerPID   func(net.Conn) (pid int, ok bool, err error) // ipc.PeerPID in production
 	Runner    Runner
+	Check     check.Runner // the check commands (5.16); check.Exec when nil
 	Clock     Clock
 	Rand      io.Reader
 	Log       *slog.Logger
@@ -167,16 +174,35 @@ type Listener struct {
 	lastTick   time.Time
 	fatal      error // set when the listener must stop, returned by Run
 
-	tokens   map[string]string // agent user id -> token; never in state
-	standing string
-	flights  map[string]*flight
-	retrying map[string]bool
-	conns    map[*client]struct{}
-	changed  chan struct{} // closed and replaced when sessions change
-	running  map[string]bool
-	members  []string
-	membAt   time.Time
-	dirty    bool
+	tokens    map[string]string // agent user id -> token; never in state
+	standing  string
+	standUser string // the standing token's account, as POST /standing named it (standingUserLocked)
+	flights   map[string]*flight
+	retrying  map[string]bool
+	conns     map[*client]struct{}
+	changed   chan struct{} // closed and replaced when sessions change
+	running   map[string]*resumeRun
+	self      int                            // this process's pid: a caller chain through it is a run (5.11)
+	shown     map[string]map[string][]string // agent (flightKey) -> thread -> messages printed since its last post there
+	pausedOn  map[string]bool                // messages that got ⏸️ (5.15)
+	blocked   map[string]bool                // agent (flightKey) and message that got ⛔ for a refused post (5.16)
+	checkIn   string                         // the incoming check command, read before each routed batch (5.16)
+	checks    chan struct{}                  // bounds incoming check commands running at once
+	checkMu   sync.Mutex
+	checkLast [2]string       // the check commands (outgoing, incoming) read last from config.json (5.16)
+	checkBad  bool            // config.json was unreadable at the last read; logged once
+	opening   map[string]bool // sessions whose owner's SessionStart is stopping their run (5.11)
+	hourRuns  []time.Time     // background runs started in the last hour, oldest first; memory only (5.11)
+	hourFull  bool            // the hourly limit held a run since the last start; logged once
+	members   []string
+	membAt    time.Time
+	membGone  map[string]bool // ids a fresh fetch of members did not hold; reset with each fetch
+	dirty     bool
+
+	// Reports (5.17), memory only. repMu runs one report at a time.
+	repMu    sync.Mutex
+	repNone  time.Time // no report room for this pairing: skip reports until then
+	repLimit time.Time // when the hourly limit on runs was last reported
 
 	saveMu   sync.Mutex
 	reloadCh chan chan error
@@ -192,6 +218,9 @@ func New(cfg Config, stateDir string, d Deps) (*Listener, error) {
 	}
 	if d.Rand == nil {
 		d.Rand = rand.Reader
+	}
+	if d.Check == nil {
+		d.Check = check.Exec{}
 	}
 	d.Clock = wallClock{d.Clock}
 	if d.Log == nil {
@@ -228,10 +257,15 @@ func New(cfg Config, stateDir string, d Deps) (*Listener, error) {
 		cfg: cfg, dir: stateDir, d: d, log: d.Log, ver: cfg.Version, bg: bg, stop: stop,
 		st: st, stateReset: reset,
 		tokens: map[string]string{}, flights: map[string]*flight{}, retrying: map[string]bool{}, conns: map[*client]struct{}{},
-		changed: make(chan struct{}), running: map[string]bool{},
+		changed: make(chan struct{}), running: map[string]*resumeRun{}, self: os.Getpid(),
+		shown: map[string]map[string][]string{}, pausedOn: map[string]bool{}, opening: map[string]bool{},
+		blocked: map[string]bool{}, checks: make(chan struct{}, checkMax),
 		reloadCh: make(chan chan error), recheck: make(chan struct{}, 1), halt: make(chan struct{}, 1),
 	}
 	l.conf.Store(conf)
+	if conf != nil {
+		l.checkLast = [2]string{conf.CheckOutgoing, conf.CheckIncoming}
+	}
 	if conf == nil {
 		l.phase, l.detail = wire.StateUnpaired, textNotPaired
 	} else {
@@ -283,6 +317,8 @@ func (l *Listener) Run(ctx context.Context, ln net.Listener) error {
 	l.lastTick = l.d.Clock.Now()
 	l.mu.Unlock()
 	l.save()
+	// Checks a restart left waiting start before the sync can add new ones (5.16).
+	l.resumeChecks()
 	l.spawn(func() { l.supervise(l.bg) })
 	l.spawn(func() {
 		l.deadlines()
@@ -394,7 +430,7 @@ func describe(err error) string {
 
 func (l *Listener) setUnpaired(detail string) {
 	l.mu.Lock()
-	l.phase, l.detail, l.standing = wire.StateUnpaired, detail, ""
+	l.phase, l.detail, l.standing, l.standUser = wire.StateUnpaired, detail, "", ""
 	l.mu.Unlock()
 	l.log.Warn("unpaired", "why", detail)
 }
@@ -422,7 +458,7 @@ func (l *Listener) connect(ctx context.Context) error {
 	l.conf.Store(conf)
 	l.idx.Room = conf.RoomID
 	l.mu.Unlock()
-	key, err := l.d.Secrets.Get(secrets.OwnerKeyName(conf.ServerName))
+	key, err := l.d.Secrets.Get(conf.KeyName())
 	if errors.Is(err, secrets.ErrNotFound) {
 		l.setUnpaired(textKeyMissing)
 		return &errUnpaired{textKeyMissing, textKeyMissing}
@@ -455,8 +491,15 @@ func (l *Listener) connect(ctx context.Context) error {
 		return err
 	}
 	l.mu.Lock()
-	l.standing = s.AccessToken
+	if l.standUser != "" && l.standUser != s.UserID {
+		// The registrar moved this pairing to another account (decision 43: the per-owner account
+		// was closed and this pairing got its own, or a rename). The sync keeps its next_batch: the gap fill and
+		// last_event_id (5.3) route each message once, and a reset would drop the gap.
+		l.log.Info("listener account changed", "from", l.standUser, "to", s.UserID)
+	}
+	l.standing, l.standUser = s.AccessToken, s.UserID
 	l.phase, l.detail, l.syncErr = wire.StateConnecting, "", ""
+	l.repNone = time.Time{} // a reload asks for the report room again (5.17)
 	l.mu.Unlock()
 	l.refreshMe(ctx)
 	l.mu.Lock()

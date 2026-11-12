@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -91,7 +92,11 @@ func TestRegistrarContainer(t *testing.T) {
 	if !strings.HasPrefix(p.Key, "kwak_ok_") || !strings.Contains(p.Out, "Paired as alice on "+o.Machine+" (pairing "+p.PairingID) {
 		t.Fatalf("pairing through the real registrar: key %t, output:\n%s", strings.HasPrefix(p.Key, "kwak_ok_"), p.Out)
 	}
-	WaitNotice(t, o.Human.C, o.Human.DM, fmt.Sprintf("Paired machine '%s' (linux) as pairing %s, asked from ", o.Machine, p.PairingID))
+	// The reply names the pairing's own listener account by its word pair (decision 42).
+	if got := WaitNotice(t, o.Human.C, o.Human.DM, fmt.Sprintf("Paired machine '%s' (linux) as ", o.Machine)); !regexp.MustCompile(
+		`^Paired machine '[^']*' \(linux\) as [a-z]+-[a-z]+ \(pairing ` + p.PairingID + `\), asked from `).MatchString(got) {
+		t.Fatalf("pair reply %q", got)
+	}
 
 	h := o.NewHarness(t, wire.HarnessClaude)
 	h.Begin(t)

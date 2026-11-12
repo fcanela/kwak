@@ -1,11 +1,19 @@
 GO ?= go
 
-.PHONY: all build test vet check integration it-registrar
+.PHONY: all build dev test vet check integration it-registrar
 
 all: check test
 
 build:
 	$(GO) build ./...
+
+# A dev build of kwak in bin/kwak (decision 40): it uses its own kwak-dev folders for config,
+# state and socket, and never installs the user service. go install and the Nix package never
+# set this flag, so their binaries are release builds. See docs/development.md.
+DEV_LDFLAGS = -X github.com/fcanela/kwak/internal/paths.flavor=dev
+
+dev:
+	$(GO) build -ldflags "$(DEV_LDFLAGS)" -o bin/kwak ./cmd/kwak
 
 test:
 	$(GO) test -race ./...

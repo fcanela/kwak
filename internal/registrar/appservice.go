@@ -201,10 +201,16 @@ func (s *Server) roleOf(mxid string) role {
 	return r
 }
 
-// invited handles an invite of @registrar (spec 3.3 step 2).
+// invited handles an invite of @registrar (spec 3.3 step 2). An invite to a configured side room
+// (an invite-only report room, for example) is what its join was waiting for: it is joined as a
+// side room at once and never taken for a DM.
 func (s *Server) invited(ctx context.Context, inviter, room string) {
 	r := s.roleOf(inviter)
-	if (!r.admin && r.owner == "") || r.dm != "" {
+	if !r.admin && r.owner == "" {
+		return
+	}
+	s.joinSideRooms(ctx, true)
+	if s.knownRoom(room) || r.dm != "" {
 		return
 	}
 	if err := s.HS.JoinAs(ctx, "", room); err != nil {

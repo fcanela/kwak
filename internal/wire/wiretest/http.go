@@ -12,29 +12,43 @@ import (
 
 // Fixture values shared by both tables. None is a real secret.
 const (
-	ServerName    = "kwak.test"
-	Owner         = "fcanela"
-	PairingID     = "3f9a1c2e"
-	OldPairingID  = "77c0de11"
-	Machine       = "laptop"
-	RoomID        = "!a1B2c3D4"
-	Bot           = "@registrar:" + ServerName
-	PairCode      = "7H3Q-9XRM-K2PD"
-	Claim         = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
-	OwnerKey      = "kwak_ok_ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
-	OldOwnerKey   = "kwak_ok_QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8"
-	BadKey        = "kwak_ok_YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8"
-	StandingToken = "tok-standing-0001"
-	AgentToken    = "tok-agent-0001"
-	ClaudeSession = "4f2a9c1e-7b03-4d5a-8c0d-1e2f3a4b5c6d" // UUIDv4
-	CodexSession  = "01a198dd-ad17-79f0-8261-713321e78fea" // UUIDv7
-	StandingUser  = "@agent.fcanela.listener:" + ServerName
-	ClaudeAgent   = "@agent.fcanela.4f2a9c1e7b034d5a:" + ServerName // Candidates(...)[0]
-	CodexAgent    = "@agent.fcanela.8261713321e78fea:" + ServerName // Candidates(...)[0]
-	HelperAgent   = "@agent.fcanela.4f2a9c1e7b034d5a.tests:" + ServerName
-	OtherAgent    = "@agent.bob.0718a1b2c3d4e5f6:" + ServerName
-	RequestID     = "00112233445566778899aabbccddeeff"
+	ServerName     = "kwak.test"
+	Owner          = "fcanela"
+	PairingID      = "3f9a1c2e"
+	OldPairingID   = "77c0de11"
+	Machine        = "laptop"
+	RoomID         = "!a1B2c3D4"
+	Bot            = "@registrar:" + ServerName
+	PairCode       = "7H3Q-9XRM-K2PD"
+	Claim          = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+	OwnerKey       = "kwak_ok_ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+	OldOwnerKey    = "kwak_ok_QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8"
+	BadKey         = "kwak_ok_YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8"
+	StandingToken  = "tok-standing-0001"
+	AgentToken     = "tok-agent-0001"
+	ClaudeSession  = "4f2a9c1e-7b03-4d5a-8c0d-1e2f3a4b5c6d"                  // UUIDv4
+	CodexSession   = "01a198dd-ad17-79f0-8261-713321e78fea"                  // UUIDv7
+	StandingUser   = "@agent.fcanela.brave-heron.listener:" + ServerName     // the pairing's listener account (decision 42)
+	TestStanding   = "@agent.fcanela.calm-otter-test.listener:" + ServerName // a test pairing's listener account
+	LegacyStanding = "@agent.fcanela.listener:" + ServerName                 // the per-owner account of builds before decision 42
+	ReportRoomID   = "!r3P0rtR00m"
+	ClaudeAgent    = "@agent.fcanela.4f2a9c1e7b034d5a:" + ServerName // Candidates(...)[0]
+	CodexAgent     = "@agent.fcanela.8261713321e78fea:" + ServerName // Candidates(...)[0]
+	HelperAgent    = "@agent.fcanela.4f2a9c1e7b034d5a.tests:" + ServerName
+	OtherAgent     = "@agent.bob.0718a1b2c3d4e5f6:" + ServerName
+	RequestID      = "00112233445566778899aabbccddeeff"
 )
+
+// LegacyStandingLocalpart is the per-owner standing account of the builds before decision 42:
+// "agent.<owner>.listener", or "agent.<owner>.listener-test" for test pairings. The registrar
+// never makes one any more and its job pass closes the ones left (decision 43); tests use this to
+// seed state as those builds left it.
+func LegacyStandingLocalpart(owner string, test bool) string {
+	if test {
+		return "agent." + owner + ".listener-test"
+	}
+	return "agent." + owner + ".listener"
+}
 
 // Exchange is one request to the registrar's listener API and its answer.
 type Exchange struct {
@@ -366,6 +380,43 @@ var HTTP = []Exchange{
 		Auth:   bearer(OwnerKey),
 		Status: 403, Errcode: wire.ErrOwnerRemoved, Response: apiErr(wire.ErrOwnerRemoved, "owner removed"),
 	},
+
+	// POST /report/join (decisions 39 and 40)
+	{
+		Name: "report: join the session's agent", Method: "POST", Path: wire.APIPrefix + wire.PathReportJoin,
+		Auth: bearer(OwnerKey), Request: `{"user_id":"` + ClaudeAgent + `"}`,
+		Status: 200, Response: `{"room_id":"` + ReportRoomID + `"}`,
+	},
+	{
+		Name: "report: join the standing account", Method: "POST", Path: wire.APIPrefix + wire.PathReportJoin,
+		Auth: bearer(OwnerKey), Request: `{"user_id":"` + StandingUser + `"}`,
+		Status: 200, Response: `{"room_id":"` + ReportRoomID + `"}`,
+	},
+	{
+		Name: "report: another pairing's agent", Method: "POST", Path: wire.APIPrefix + wire.PathReportJoin,
+		Auth: bearer(OwnerKey), Request: `{"user_id":"` + OtherAgent + `"}`,
+		Status: 403, Errcode: wire.ErrNotYours, Response: apiErr(wire.ErrNotYours, "not an open account of this pairing"),
+	},
+	{
+		Name: "report: the standing account of the other kind", Method: "POST", Path: wire.APIPrefix + wire.PathReportJoin,
+		Auth: bearer(OwnerKey), Request: `{"user_id":"` + TestStanding + `"}`,
+		Status: 403, Errcode: wire.ErrNotYours, Response: apiErr(wire.ErrNotYours, "not an open account of this pairing"),
+	},
+	{
+		Name: "report: no report room", Method: "POST", Path: wire.APIPrefix + wire.PathReportJoin,
+		Auth: bearer(OwnerKey), Request: `{"user_id":"` + StandingUser + `"}`,
+		Status: 404, Errcode: wire.ErrNoReportRoom, Response: apiErr(wire.ErrNoReportRoom, "this server has no report room for this pairing"),
+	},
+	{
+		Name: "report: unknown field", Method: "POST", Path: wire.APIPrefix + wire.PathReportJoin,
+		Auth: bearer(OwnerKey), Request: `{"user_id":"` + StandingUser + `","text":"hi"}`, BadBody: true,
+		Status: 400, Errcode: wire.ErrBadRequest, Response: apiErr(wire.ErrBadRequest, `json: unknown field "text"`),
+	},
+	{
+		Name: "report: bad key", Method: "POST", Path: wire.APIPrefix + wire.PathReportJoin,
+		Auth: bearer(BadKey), Request: `{"user_id":"` + StandingUser + `"}`,
+		Status: 401, Errcode: wire.ErrBadKey, Response: apiErr(wire.ErrBadKey, "unknown, expired or revoked key"),
+	},
 }
 
 // NewRequest returns a pointer to the type the request body decodes into, or nil for no body.
@@ -382,6 +433,8 @@ func (e Exchange) NewRequest() any {
 		return new(wire.CloseRequest)
 	case wire.PathAgentsAlive:
 		return new(wire.AliveRequest)
+	case wire.PathReportJoin:
+		return new(wire.ReportJoinRequest)
 	case wire.PathPairClaim, wire.PathStanding, wire.PathUnpair:
 		return new(wire.Empty)
 	}
@@ -413,6 +466,8 @@ func (e Exchange) NewResponse() any {
 		return new(wire.Empty)
 	case wire.PathMe:
 		return new(wire.Me)
+	case wire.PathReportJoin:
+		return new(wire.ReportJoin)
 	}
 	return nil
 }

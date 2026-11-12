@@ -65,8 +65,8 @@ func e1(t *testing.T, w *World) {
 		if !strings.Contains(p.Out, want) {
 			t.Fatalf("kwak pair output lacks %q:\n%s", want, p.Out)
 		}
-		WaitNotice(t, o.Human.C, o.Human.DM, fmt.Sprintf("Paired machine '%s' (linux) as pairing %s, asked from ", o.Machine, p.PairingID))
-		standing := "@" + wire.StandingLocalpart(o.Name) + ":" + Server
+		WaitNotice(t, o.Human.C, o.Human.DM, PairedNotice(t, w.Reg, o.Machine, p.PairingID))
+		standing := w.Reg.Listener(t, p.PairingID)
 		if devs := w.Devices(t, standing); !slices.Contains(devs, "KWAK-"+p.PairingID) {
 			t.Fatalf("devices of %s: %v, want KWAK-%s", standing, devs, p.PairingID)
 		}
@@ -146,7 +146,7 @@ func e3(t *testing.T, w *World, a, b *FakeHarness, aID, bID string) {
 	repID := w.LastInThread(t, root)
 	out = a.WaitHook(t, wire.EventPostTool, nil)
 	SameJSON(t, "A's post-tool hook", out, ContextJSON("PostToolUse",
-		Rendered(aID, wire.HarnessClaude, w.Item(t, repID, render.Mention, root))))
+		Rendered(aID, wire.HarnessClaude, Own(w.Item(t, repID, render.Mention, root)))))
 
 	if _, err := w.Bob.Human.C.Join(t.Context(), w.Room); err != nil {
 		t.Fatalf("bob joins the agents room: %v", err)

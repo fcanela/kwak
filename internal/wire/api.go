@@ -36,6 +36,7 @@ const (
 	PathAgentsAlive = "/agents/alive"
 	PathUnpair      = "/unpair"
 	PathMe          = "/me"
+	PathReportJoin  = "/report/join"
 )
 
 // MaxBody is the largest API request body the registrar reads.
@@ -55,12 +56,13 @@ const (
 	ErrNamesExhausted = "KWAK_NAMES_EXHAUSTED" // 409
 	ErrHomeserver     = "KWAK_HOMESERVER"      // 502: Error carries the tuwunel errcode
 	ErrExpired        = "KWAK_EXPIRED"         // 410: claim expired or already collected
+	ErrNoReportRoom   = "KWAK_NO_REPORT_ROOM"  // 404: the server has no report room for this pairing's kind
 )
 
 // Errcodes lists every registrar API errcode.
 var Errcodes = []string{
 	ErrBadKey, ErrOwnerRemoved, ErrNotYours, ErrParentClosed, ErrBadSession, ErrBadRequest,
-	ErrNamesExhausted, ErrHomeserver, ErrExpired,
+	ErrNamesExhausted, ErrHomeserver, ErrExpired, ErrNoReportRoom,
 }
 
 // StatusFor returns the HTTP status that goes with an errcode, or 0 for an unknown one.
@@ -72,6 +74,8 @@ func StatusFor(errcode string) int {
 		return 401
 	case ErrOwnerRemoved, ErrNotYours, ErrParentClosed:
 		return 403
+	case ErrNoReportRoom:
+		return 404
 	case ErrNamesExhausted:
 		return 409
 	case ErrExpired:
@@ -126,6 +130,9 @@ type ClaimResponse struct {
 	RoomID       string    `json:"room_id,omitempty"`
 	StandingUser string    `json:"standing_user,omitempty"`
 	ServerName   string    `json:"server_name,omitempty"`
+	// Test is set for a test pairing (decision 40): RoomID is then the test room and StandingUser
+	// the test standing account. Absent for a normal pairing.
+	Test bool `json:"test,omitempty"`
 }
 
 // Standing is the 200 body of POST /standing.
@@ -200,6 +207,21 @@ type Me struct {
 	KeyExpiresAt time.Time `json:"key_expires_at"`
 	AgentsOpen   int       `json:"agents_open"`
 	Settings     Settings  `json:"settings"`
+	Test         bool      `json:"test,omitempty"` // a test pairing (decision 40); absent for a normal one
+}
+
+// ReportJoinRequest is the body of POST /report/join. UserID is one of the caller's own accounts:
+// an open session or helper agent of this pairing, or this pairing's own listener account
+// (decision 42).
+type ReportJoinRequest struct {
+	UserID string `json:"user_id"`
+}
+
+// ReportJoin is the 200 body of POST /report/join: the report room the account is now a member
+// of. The listener posts one line there with that account's own token, then leaves with it; the
+// pairing's listener account leaves too (spec 5.17, decision 42).
+type ReportJoin struct {
+	RoomID string `json:"room_id"`
 }
 
 // ---- Local IPC (spec 5.6) ----
@@ -321,26 +343,63 @@ const (
 
 // StatusResponse answers the status op (kwak status, and kwak setup's wait).
 type StatusResponse struct {
-	V            int             `json:"v"`
-	OK           bool            `json:"ok"`
-	Err          string          `json:"err,omitempty"`
-	Kwak         string          `json:"kwak"`
-	State        string          `json:"state"`
-	Detail       string          `json:"detail,omitempty"` // human text for State, for example why unpaired
-	Server       string          `json:"server,omitempty"`
-	Owner        string          `json:"owner,omitempty"`
-	Machine      string          `json:"machine,omitempty"`
-	PairingID    string          `json:"pairing_id,omitempty"`
-	KeyExpiresAt time.Time       `json:"key_expires_at,omitzero"`
-	Settings     Settings        `json:"settings,omitzero"`
-	LastSync     time.Time       `json:"last_sync,omitzero"`
-	SyncError    string          `json:"sync_error,omitempty"`
-	StateReset   bool            `json:"state_reset,omitempty"`
-	CallerChecks string          `json:"caller_checks"`    // "peer" or "claimed"
-	Resume       string          `json:"resume,omitempty"` // for example "background resume: Claude only"
-	ResumeRuns   int             `json:"resume_runs"`
-	ResumeActive int             `json:"resume_active"`
-	Sessions     []SessionStatus `json:"sessions"`
+	V         int    `json:"v"`
+	OK        bool   `json:"ok"`
+	Err       string `json:"err,omitempty"`
+	Kwak      string `json:"kwak"`
+	State     string `json:"state"`
+	Detail    string `json:"detail,omitempty"` // human text for State, for example why unpaired
+	Server    string `json:"server,omitempty"`
+	Owner     string `json:"owner,omitempty"`
+	Machine   string `json:"machine,omitempty"`
+	PairingID string `json:"pairing_id,omitempty"`
+	Test      bool   `json:"test,omitempty"` // a test pairing (decision 40)
+	// ListenerAccount is the user id the listener syncs as, from its last POST /standing: the
+	// pairing's own listener account (decision 42). Empty until that call works. Added 2026-11-12.
+	ListenerAccount string         `json:"listener_account,omitempty"`
+	KeyExpiresAt    time.Time      `json:"key_expires_at,omitzero"`
+	Settings        Settings       `json:"settings,omitzero"`
+	LastSync        time.Time      `json:"last_sync,omitzero"`
+	SyncError       string         `json:"sync_error,omitempty"`
+	StateReset      bool           `json:"state_reset,omitempty"`
+	CallerChecks    string         `json:"caller_checks"`    // "peer" or "claimed"
+	Resume          string         `json:"resume,omitempty"` // for example "background resume: Claude only"
+	ResumeRuns      int            `json:"resume_runs"`
+	ResumeActive    int            `json:"resume_active"`
+	Paused          []PausedThread `json:"paused,omitempty"` // threads at the loop ceiling
+	// While the hourly limit on background runs holds (decision 38): the limit, and when (UTC) the
+	// next run may start.
+	ResumeHourLimit int       `json:"resume_hour_limit,omitempty"`
+	ResumeNextAt    time.Time `json:"resume_next_at,omitzero"`
+	// The message checks (spec 5.16): the check commands ("" is off), the messages waiting for the
+	// incoming check, and the latest messages a check stopped, oldest first.
+	CheckOutgoing string          `json:"check_outgoing,omitempty"`
+	CheckIncoming string          `json:"check_incoming,omitempty"`
+	CheckWaiting  int             `json:"check_waiting,omitempty"`
+	Rejected      []Rejection     `json:"rejected,omitempty"`
+	Sessions      []SessionStatus `json:"sessions"`
+}
+
+// Rejection is one message a check stopped (spec 5.16). Way is "outgoing" (a post by a local agent
+// that kwak did not send) or "incoming" (a message held from a local session). Check is "secrets"
+// or "command". Reason never holds a secret.
+type Rejection struct {
+	At      time.Time `json:"at"`
+	Way     string    `json:"way"`
+	Session string    `json:"session"`
+	Agent   string    `json:"agent,omitempty"`
+	Sender  string    `json:"sender,omitempty"`
+	Tool    string    `json:"tool,omitempty"`
+	Thread  string    `json:"thread,omitempty"`
+	Event   string    `json:"event,omitempty"`
+	Check   string    `json:"check"`
+	Reason  string    `json:"reason"`
+}
+
+// PausedThread is a thread whose background runs on this machine stopped at the loop ceiling.
+type PausedThread struct {
+	Thread string `json:"thread"`
+	Turns  int    `json:"turns"`
 }
 
 // SessionStatus is one session in StatusResponse.
@@ -351,8 +410,8 @@ type SessionStatus struct {
 	Cwd       string    `json:"cwd"`
 	Agent     string    `json:"agent,omitempty"`
 	Helpers   []string  `json:"helpers,omitempty"`
-	Volunteer bool      `json:"volunteer"`
-	Tools     bool      `json:"tools"` // an MCP connection is attached
+	Volunteer bool      `json:"volunteer"` // a live session that volunteers; never an ended one
+	Tools     bool      `json:"tools"`     // an MCP connection is attached
 	Started   time.Time `json:"started"`
 	Ended     time.Time `json:"ended,omitzero"`
 	LastHook  time.Time `json:"last_hook,omitzero"`
@@ -410,11 +469,17 @@ const (
 )
 
 // Name is a parsed agent localpart. Hex is empty for a standing name, Helper set only for a helper.
+// A standing name is a pairing's listener account (decision 42), with Pair its word pair
+// ("brave-heron"), or one of the per-owner standing accounts of earlier builds, with Pair empty.
+// Test is set only for a standing name of a test pairing: "<pair>-test", or the old
+// agent.<owner>.listener-test.
 type Name struct {
 	Kind   Kind
 	Owner  string
 	Hex    string
 	Helper string
+	Test   bool
+	Pair   string
 }
 
 // ---- Appservice registration (spec 3.7) ----

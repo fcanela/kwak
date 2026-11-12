@@ -35,6 +35,7 @@ type DoctorDeps struct {
 	Stat       func(string) (fs.FileInfo, error)
 	ConfigDir  func() (string, error)
 	SocketPath func() (string, error)
+	Dev        bool // a dev build (paths.Dev): doctor says so and names its folder
 }
 
 // Doctor-only texts.
@@ -110,14 +111,18 @@ func Doctor(d DoctorDeps) MainFunc {
 }
 
 func (d *DoctorDeps) run(r *report) {
+	if d.Dev {
+		dir, _ := d.ConfigDir()
+		r.line("warn", "build", "a dev build (make dev). It uses its own test folder, config %s, never your real pairing's.", dir)
+	}
 	for _, name := range []string{paths.EnvSocket, paths.EnvStateDir, paths.EnvConfigDir} {
 		if v := d.Getenv(name); v != "" {
 			r.line("warn", "env", "%s is set to %s. It is a test override; production never sets it.", name, v)
 		}
 	}
 	busOK := d.checkBus(r)
-	server := d.checkConfig(r)
-	d.checkKeyring(r, busOK, server)
+	keyName := d.checkConfig(r)
+	d.checkKeyring(r, busOK, keyName)
 	d.checkListener(r)
 	d.checkPath(r)
 	d.checkClaude(r)
@@ -158,11 +163,16 @@ func (d *DoctorDeps) checkConfig(r *report) string {
 		r.line("FAIL", "config", "%s has no server_name; run kwak pair", path)
 		return ""
 	}
-	r.line("ok", "config", "paired as %s on %s, server %s", c.Owner, c.Machine, c.Server)
-	return c.ServerName
+	kind := ""
+	if c.Test {
+		kind = " (a test pairing)"
+	}
+	r.line("ok", "config", "paired as %s on %s, server %s%s", c.Owner, c.Machine, c.Server, kind)
+	return c.KeyName()
 }
 
-func (d *DoctorDeps) checkKeyring(r *report, busOK bool, server string) {
+// checkKeyring looks for the owner key under keyName, the item config.json names (secrets.KeyName).
+func (d *DoctorDeps) checkKeyring(r *report, busOK bool, keyName string) {
 	switch {
 	case d.Secrets == nil:
 		r.line("skip", "keyring", "not checked")
@@ -170,11 +180,11 @@ func (d *DoctorDeps) checkKeyring(r *report, busOK bool, server string) {
 	case !busOK:
 		r.line("skip", "keyring", "not checked without a session bus")
 		return
-	case server == "":
+	case keyName == "":
 		r.line("skip", "keyring", "not checked, because the machine is not paired")
 		return
 	}
-	_, err := d.Secrets.Get(secrets.OwnerKeyName(server))
+	_, err := d.Secrets.Get(keyName)
 	switch {
 	case err == nil:
 		r.line("ok", "keyring", "the owner key is there (not shown)")
@@ -205,6 +215,9 @@ func (d *DoctorDeps) checkListener(r *report) {
 		return
 	}
 	r.line("ok", "socket", "%s, listener %s, %s", sock, st.Kwak, st.State)
+	if st.ListenerAccount != "" {
+		r.line("ok", "account", "the listener syncs as %s, this pairing's own listener account", st.ListenerAccount)
+	}
 	if cmp, err := wire.CompareVersions(st.Kwak, wire.Version); err == nil && cmp < 0 {
 		r.line("warn", "listener", "%s", TextListenerOlder)
 	}

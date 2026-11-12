@@ -308,7 +308,7 @@ func TestAliveTouchesOnlyThisPairing(t *testing.T) {
 	a := f.mustAgent(p.key, wire.HarnessClaude, wt.ClaudeSession, "")
 	f.clock.Advance(time.Hour)
 	var out wire.AliveResponse
-	f.callJSON("POST", wire.PathAgentsAlive, p.key, wire.AliveRequest{UserIDs: []string{a.UserID, mx("agent.fcanela.listener")}, Touch: true}, &out)
+	f.callJSON("POST", wire.PathAgentsAlive, p.key, wire.AliveRequest{UserIDs: []string{a.UserID, f.listenerUID(p.id)}, Touch: true}, &out)
 	if len(out.Unknown) != 1 || len(out.Closed) != 0 {
 		t.Fatalf("alive %+v", out)
 	}
@@ -332,18 +332,29 @@ func TestAliveWithoutTouchLeavesLastActive(t *testing.T) {
 	}
 }
 
+// Two machines of one owner have two listener accounts (decision 42), one device each. Revoking
+// one machine closes its account and leaves the other's token alone.
 func TestStandingLogsOutOnlyItsDevice(t *testing.T) {
 	f, p := pairedFixture(t)
 	other := f.pair("fcanela", "", true)
 	var s1, s2 wire.Standing
 	f.callJSON("POST", wire.PathStanding, p.key, struct{}{}, &s1)
 	f.callJSON("POST", wire.PathStanding, other.key, struct{}{}, &s2)
-	if live := f.hs.live(s1.UserID); len(live) != 2 {
-		t.Fatalf("two machines, live %v", live)
+	if s1.UserID == s2.UserID || s1.UserID != f.listenerUID(p.id) || s2.UserID != f.listenerUID(other.id) {
+		t.Fatalf("two machines share a listener account: %s, %s", s1.UserID, s2.UserID)
+	}
+	if live := f.hs.live(s1.UserID); len(live) != 1 || live[0] != s1.AccessToken {
+		t.Fatalf("first machine, live %v", live)
 	}
 	f.say(mx("fcanela"), f.dm(mx("fcanela")), "revoke "+p.id)
-	if live := f.hs.live(s1.UserID); len(live) != 1 || live[0] != s2.AccessToken {
-		t.Fatalf("revoking one machine: live %v, want only %s", live, s2.AccessToken)
+	if live := f.hs.live(s1.UserID); len(live) != 0 || f.hs.member(testRoom, s1.UserID) {
+		t.Fatalf("revoked machine's account: live %v", live)
+	}
+	if a := f.state().Agents[f.listenerLP(p.id)]; a.Closed == nil || a.CloseReason != "revoked" || !a.CleanupDone {
+		t.Fatalf("revoked machine's account record %+v", a)
+	}
+	if live := f.hs.live(s2.UserID); len(live) != 1 || live[0] != s2.AccessToken || !f.hs.member(testRoom, s2.UserID) {
+		t.Fatalf("the other machine: live %v, want only %s", live, s2.AccessToken)
 	}
 }
 

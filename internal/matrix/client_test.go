@@ -213,6 +213,15 @@ func TestEndpoints(t *testing.T) {
 			resp: `{"event_id":"$sent"}`, want: "$sent",
 		},
 		{
+			name: "react",
+			run: func(ctx context.Context, c *matrix.Client) (any, error) {
+				return c.React(ctx, room, "kwak-0123456789abcdef", "$ev/1+x", "👀")
+			},
+			method: "PUT", path: "/_matrix/client/v3/rooms/" + eroom + "/send/m.reaction/kwak-0123456789abcdef",
+			body: `{"m.relates_to":{"rel_type":"m.annotation","event_id":"$ev/1+x","key":"👀"}}`,
+			resp: `{"event_id":"$r"}`, want: "$r",
+		},
+		{
 			name: "sync full",
 			run: func(ctx context.Context, c *matrix.Client) (any, error) {
 				r, err := c.Sync(ctx, "s1", `{"room":{"rooms":["!a"]}}`, 30*time.Second)

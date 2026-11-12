@@ -87,7 +87,7 @@ func (c *CLI) pair(ctx context.Context, f pairFlags, stdin io.Reader, stdout io.
 	}
 	oldKey := ""
 	if old != nil {
-		oldKey, err = c.env.Secrets.Get(secrets.OwnerKeyName(old.ServerName))
+		oldKey, err = c.env.Secrets.Get(old.KeyName())
 		if errors.Is(err, secrets.ErrNotFound) {
 			oldKey, err = "", nil
 		}
@@ -102,9 +102,16 @@ func (c *CLI) pair(ctx context.Context, f pairFlags, stdin io.Reader, stdout io.
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(stdout, "In Element, send this to %s, in your chat with it:\n\n    pair %s\n\n"+
+	command := "pair"
+	if c.env.Dev {
+		// A dev build pairs for tests by default (decision 40): its agents then reach only the
+		// test rooms. Sending plain "pair <code>" still makes a normal pairing.
+		command = "pair test"
+		fmt.Fprintln(stdout, "This is a dev build of kwak, so it suggests a test pairing.")
+	}
+	fmt.Fprintf(stdout, "In Element, send this to %s, in your chat with it:\n\n    %s %s\n\n"+
 		"The code works once, for 10 minutes. kwak never asks you to paste a secret. Waiting...\n",
-		render.Sanitize(started.Bot), render.Sanitize(started.Code))
+		render.Sanitize(started.Bot), command, render.Sanitize(started.Code))
 	if oldKey != "" && !started.Replaces {
 		fmt.Fprintln(stdout, "The registrar did not accept this machine's old key, so this is a new pairing.")
 	}
@@ -130,12 +137,16 @@ func (c *CLI) pair(ctx context.Context, f pairFlags, stdin io.Reader, stdout io.
 	cfg := &Config{MachineConfig: wire.MachineConfig{
 		Version: ConfigVersion, Server: server, ServerName: got.ServerName, Owner: got.Owner,
 		Machine: machine, PairingID: got.PairingID, RoomID: got.RoomID, StandingUser: got.StandingUser,
-		ResumeMax: DefaultResumeMax,
+		ResumeMax: DefaultResumeMax, Test: got.Test,
+		KeyringUser: secrets.PairingKeyName(got.ServerName, got.PairingID),
 	}}
 	if old != nil {
-		cfg.ResumeMax, cfg.ResumeExe, cfg.extra = old.ResumeMax, old.ResumeExe, old.extra
+		cfg.ResumeMax, cfg.ResumeExe, cfg.ThreadCeiling, cfg.extra = old.ResumeMax, old.ResumeExe, old.ThreadCeiling, old.extra
+		cfg.CheckOutgoing, cfg.CheckIncoming, cfg.ResumePerHour = old.CheckOutgoing, old.CheckIncoming, old.ResumePerHour
 	}
-	keyName := secrets.OwnerKeyName(got.ServerName)
+	// Each pairing has its own keyring item (decision 40), so a re-pair writes a new one next to
+	// the old one and removes the old one only once the registrar took the new key.
+	keyName := cfg.KeyringUser
 	if err := c.store(dir, keyName, got.OwnerKey, cfg); err != nil {
 		return nil, errors.Join(err, c.restore(dir, keyName, old, oldKey))
 	}
@@ -157,6 +168,10 @@ func (c *CLI) pair(ctx context.Context, f pairFlags, stdin io.Reader, stdout io.
 		}
 	}
 
+	if old != nil {
+		c.afterRepair(ctx, stdout, server, started.Bot, old, oldKey, cfg)
+	}
+
 	var rr wire.ReloadResponse
 	err = c.callWait(ctx, wire.OpReload, &rr, reloadWait)
 	switch {
@@ -167,7 +182,50 @@ func (c *CLI) pair(ctx context.Context, f pairFlags, stdin io.Reader, stdout io.
 	}
 	fmt.Fprintf(stdout, "Paired as %s on %s (pairing %s, key valid until %s).\n",
 		cfg.Owner, cfg.Machine, cfg.PairingID, got.KeyExpiresAt.UTC().Format("2006-01-02"))
+	switch {
+	case cfg.Test:
+		fmt.Fprintln(stdout, "This is a test pairing: its agents reach only the test rooms.")
+	case c.env.Dev:
+		fmt.Fprintln(stdout, "Note: this dev build got a normal pairing, so its agents join the main agents room. "+
+			"For a test pairing, run kwak unpair, then kwak pair, and send \"pair test <code>\".")
+	}
 	return cfg, nil
+}
+
+// afterRepair runs once the registrar took the new key of a re-pair. It asks the registrar about
+// the old key, removes the old keyring item when that is safe, and says when the earlier pairing
+// is still live: a pairing of the other kind is a new pairing and leaves the old one as it is
+// (decision 41, spec Q34).
+//
+// The old shared item "<server_name>/owner-key" is removed only when the registrar refuses its key:
+// two folders that an older kwak paired on one machine (decision 40) both read that one item, so
+// while its key works another folder may still be using it.
+func (c *CLI) afterRepair(ctx context.Context, stdout io.Writer, server, bot string, old *Config, oldKey string, cfg *Config) {
+	oldName := old.KeyName()
+	if oldName == cfg.KeyringUser {
+		return
+	}
+	dead, livePairing := oldKey == "", ""
+	if oldKey != "" {
+		me, err := c.registrar(server, fixedKey(oldKey)).Me(ctx)
+		switch code := regclient.Code(err); {
+		case err == nil:
+			livePairing = me.PairingID
+		case code == wire.ErrBadKey || code == wire.ErrOwnerRemoved:
+			dead = true
+		}
+	}
+	if oldName == secrets.OwnerKeyName(old.ServerName) && !dead {
+		fmt.Fprintf(stdout, "The old shared keyring item %q (service %s) is kept: another kwak folder on this machine, "+
+			"paired by an older kwak, may still use it. If none does, delete it by hand.\n", oldName, secrets.Service)
+	} else if err := c.env.Secrets.Delete(oldName); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+		fmt.Fprintf(stdout, "The old keyring item %q (service %s) could not be deleted (%v); delete it by hand.\n",
+			oldName, secrets.Service, err)
+	}
+	if livePairing != "" && livePairing != cfg.PairingID {
+		fmt.Fprintf(stdout, "The earlier pairing %s stays live until you revoke it or it expires; to end it, send \"revoke %s\" to %s.\n",
+			render.Sanitize(livePairing), render.Sanitize(livePairing), render.Sanitize(bot))
+	}
 }
 
 // oldKeyStillWorks tells, after a failed POST /standing on a re-pair, whether the old key is still
@@ -343,7 +401,7 @@ func (c *CLI) restore(dir, keyName string, old *Config, oldKey string) error {
 		}
 		return errors.Join(errs...)
 	}
-	oldName := secrets.OwnerKeyName(old.ServerName)
+	oldName := old.KeyName()
 	if oldName != keyName || oldKey == "" {
 		if err := c.env.Secrets.Delete(keyName); err != nil && !errors.Is(err, secrets.ErrNotFound) {
 			errs = append(errs, err)

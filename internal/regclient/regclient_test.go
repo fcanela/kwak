@@ -133,6 +133,10 @@ func run(t *testing.T, c *Client, row wiretest.Exchange) ([]byte, error) {
 		out = wire.Empty{}
 	case wire.PathMe:
 		out, err = c.Me(ctx)
+	case wire.PathReportJoin:
+		var room string
+		room, err = c.ReportJoin(ctx, req.(*wire.ReportJoinRequest).UserID)
+		out = wire.ReportJoin{RoomID: room}
 	default:
 		t.Fatalf("no client method for %s", row.Path)
 	}

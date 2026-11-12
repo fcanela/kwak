@@ -58,6 +58,9 @@ func (noRegistrar) Alive(context.Context, []string, bool) ([]string, []string, e
 }
 func (noRegistrar) Me(context.Context) (wire.Me, error) { return wire.Me{}, errNoRegistrar }
 func (noRegistrar) Unpair(context.Context) error        { return errNoRegistrar }
+func (noRegistrar) ReportJoin(context.Context, string) (string, error) {
+	return "", errNoRegistrar
+}
 
 func listenRig(t *testing.T) (ListenConfig, listener.Deps) {
 	dir := shortDir(t)
@@ -137,6 +140,9 @@ func (noMatrix) Sync(context.Context, string, string, time.Duration) (*matrix.Sy
 	return nil, errNoMatrix
 }
 func (noMatrix) Send(context.Context, string, string, any) (string, error) { return "", errNoMatrix }
+func (noMatrix) React(context.Context, string, string, string, string) (string, error) {
+	return "", errNoMatrix
+}
 func (noMatrix) Messages(context.Context, string, string, int, string) (*matrix.MessagesResponse, error) {
 	return nil, errNoMatrix
 }
@@ -147,6 +153,7 @@ func (noMatrix) ThreadReplies(context.Context, string, string, int) ([]matrix.Ev
 	return nil, errNoMatrix
 }
 func (noMatrix) JoinedMembers(context.Context, string) ([]string, error) { return nil, errNoMatrix }
+func (noMatrix) Leave(context.Context, string) error                     { return errNoMatrix }
 
 // A listener started before the first pairing takes the server from config.json at reload.
 func TestListenPairLater(t *testing.T) {
@@ -174,7 +181,7 @@ func TestListenPairLater(t *testing.T) {
 	}
 
 	conf := `{"version":1,"server":"` + srv.URL + `","server_name":"kwak.test","owner":"fcanela","machine":"laptop",` +
-		`"pairing_id":"` + wiretest.PairingID + `","room_id":"` + wiretest.RoomID + `","standing_user":"` + wiretest.StandingUser + `"}`
+		`"pairing_id":"` + wiretest.PairingID + `","room_id":"` + wiretest.RoomID + `","standing_user":"` + wiretest.StandingUser + `","keyring_user":"` + keyName + `"}`
 	os.MkdirAll(filepath.Dir(cfg.Listener.ConfigPath), 0o700)
 	if err := os.WriteFile(cfg.Listener.ConfigPath, []byte(conf), 0o600); err != nil {
 		t.Fatal(err)

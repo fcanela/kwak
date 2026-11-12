@@ -620,3 +620,75 @@ func truncate(b []byte) string {
 	}
 	return s
 }
+
+// F14 (decision 42): a listener that moves to a new account keeps its next_batch (spec 5.3). The
+// new account joined the room after that since token. Its first sync from it must not replay what
+// came before since, and must hold what came after: the message posted between the switch and the
+// join (visible under history_visibility shared) and the one after the join.
+func TestF14NewAccountKeepsSince(t *testing.T) {
+	p := startProbe(t, "F14")
+	if p == nil {
+		return
+	}
+	room := p.agentsRoom()
+	old := p.agent("agent.f14.listener", "KWAK-f14")
+	_, err := p.asUser(old.UserID).Join(p.ctx, room)
+	p.must(err, "old account joins")
+	alice := p.client(p.env.Alice.AccessToken)
+	_, err = alice.Join(p.ctx, room)
+	p.must(err, "alice joins")
+
+	filter := syncFilter(room)
+	oc := p.client(old.AccessToken)
+	first, err := oc.Sync(p.ctx, "", filter, 0)
+	p.must(err, "old account's first sync")
+	before, err := alice.Send(p.ctx, room, "f14-before", text("f14 before"))
+	p.must(err, "the message the old account routes")
+	since := first.NextBatch
+	for seen := false; !seen; {
+		r, err := oc.Sync(p.ctx, since, filter, 5*time.Second)
+		p.must(err, "old account's sync")
+		since = r.NextBatch
+		seen = slices.Contains(eventIDs(r.Rooms.Join[room].Timeline.Events), before)
+	}
+
+	gap, err := alice.Send(p.ctx, room, "f14-gap", text("f14 gap"))
+	p.must(err, "the message between the switch and the join")
+	nu := p.agent("agent.f14.brave-heron.listener", "KWAK-f14")
+	_, err = p.asUser(nu.UserID).Join(p.ctx, room)
+	p.must(err, "new account joins")
+	after, err := alice.Send(p.ctx, room, "f14-after", text("f14 after"))
+	p.must(err, "the message after the join")
+
+	nc := p.client(nu.AccessToken)
+	var ids []string
+	limited, prev, next := false, "", since
+	for i := 0; i < 20 && !slices.Contains(ids, after); i++ {
+		r, err := nc.Sync(p.ctx, next, filter, 5*time.Second)
+		p.must(err, "new account's sync from the old since")
+		next = r.NextBatch
+		tl := r.Rooms.Join[room].Timeline
+		if tl.Limited && prev == "" {
+			limited, prev = true, tl.PrevBatch
+		}
+		ids = append(ids, eventIDs(tl.Events)...)
+	}
+	p.check(!slices.Contains(ids, before), "no replay before since", "timeline %v, before %v", ids, before)
+	p.check(slices.Contains(ids, gap) && slices.Contains(ids, after), "the gap and the later message arrive",
+		"gap %v, after %v, %d events", slices.Contains(ids, gap), slices.Contains(ids, after), len(ids))
+	p.note("limited for a room joined after since", "limited %v, prev_batch set %v", limited, prev != "")
+	if !limited {
+		return
+	}
+	// A limited timeline makes the listener page back to last_event_id (5.3), here the message the
+	// old account routed, from before the new account's join.
+	found, pages, from := false, 0, prev
+	for !found && from != "" && pages < 10 {
+		page, err := nc.Messages(p.ctx, room, from, 100, `{"types":["m.room.message"]}`)
+		p.must(err, "back-fill page of the new account")
+		pages++
+		found = slices.Contains(eventIDs(page.Chunk), before)
+		from = page.End
+	}
+	p.check(found, "the gap fill reaches last_event_id from before the join", "found %v, pages %d", found, pages)
+}

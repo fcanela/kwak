@@ -75,18 +75,20 @@ func (s *Server) API() http.Handler {
 	mux.HandleFunc("POST "+p+wire.PathAgentsAlive, s.authed(s.handleAlive, true))
 	mux.HandleFunc("POST "+p+wire.PathUnpair, s.authed(s.handleUnpair, true))
 	mux.HandleFunc("GET "+p+wire.PathMe, s.authed(s.handleMe, true))
+	mux.HandleFunc("POST "+p+wire.PathReportJoin, s.authed(s.handleReportJoin, true))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 404, "M_UNRECOGNIZED", "unknown route")
 	})
 	return mux
 }
 
-// caller is the authenticated pairing of a request.
+// caller is the authenticated pairing of a request. test is set for a test pairing (decision 40).
 type caller struct {
 	pairing string
 	owner   string
 	machine string
 	ip      string
+	test    bool
 }
 
 type authedFunc func(w http.ResponseWriter, r *http.Request, c caller)
@@ -146,7 +148,7 @@ func (s *Server) authenticate(ctx context.Context, hash, ip string, confirm bool
 			e = errBadKey
 			return
 		}
-		c = caller{pairing: id, owner: p.Owner, machine: p.Machine, ip: ip}
+		c = caller{pairing: id, owner: p.Owner, machine: p.Machine, ip: ip, test: p.Test}
 		_, seen := p.IPs[ip]
 		newIP = !seen
 		write = confirm && p.Confirmed == nil || newIP
@@ -198,22 +200,39 @@ func (s *Server) confirmLocked(st *State, id string, p *Pairing, now time.Time) 
 	return s.confirmReplace(st, id, p, now)
 }
 
+// replaced finishes the revoke of a pairing a confirmed re-pair replaced: its device leaves the
+// listener account (which moved to the new pairing), and a listener account still on the old
+// pairing is closed (decision 42).
 func (s *Server) replaced(ctx context.Context, c caller, old string) {
-	if old != "" {
-		s.Log.Info("re-pair confirmed", "pairing", c.pairing, "replaced", old)
-		s.logoutStandingDevice(ctx, c.owner, old)
+	if old == "" {
+		return
+	}
+	s.Log.Info("re-pair confirmed", "pairing", c.pairing, "replaced", old)
+	s.logoutStandingDevice(ctx, c.owner, old)
+	var lps []string
+	s.Store.View(func(st *State) {
+		for lp, a := range st.Agents {
+			if a.Pairing == old && a.Closed == nil {
+				lps = append(lps, lp)
+			}
+		}
+	})
+	if _, err := s.closeAgents(ctx, lps, "replaced", "", nil); err != nil {
+		s.Log.Warn("close after re-pair", "pairing", old, "err", err)
 	}
 }
 
 // confirmReplace moves every agent record of the pairing p replaces to p and revokes the old one,
-// inside the caller's Update (spec 3.2). It returns the replaced pairing id, or "".
+// inside the caller's Update (spec 3.2). The old pairing's listener account moves too when p
+// took its name (decision 42); a listener account of another name stays and replaced closes it.
+// It returns the replaced pairing id, or "".
 func (s *Server) confirmReplace(st *State, id string, p *Pairing, now time.Time) string {
 	r := st.Pairings[p.Replaces]
-	if p.Replaces == "" || r == nil || r.Revoked != nil || r.Owner != p.Owner {
+	if p.Replaces == "" || r == nil || r.Revoked != nil || r.Owner != p.Owner || r.Test != p.Test {
 		return ""
 	}
-	for _, a := range st.Agents {
-		if a.Pairing == p.Replaces {
+	for lp, a := range st.Agents {
+		if a.Pairing == p.Replaces && (a.Kind != wire.KindStanding || lp == p.Listener) {
 			a.Pairing = id
 		}
 	}
@@ -237,27 +256,52 @@ func (s *Server) handleStanding(w http.ResponseWriter, r *http.Request, c caller
 	writeJSON(w, http.StatusOK, out)
 }
 
-// standing logs in a fresh standing device under the owner's standing lock, then confirms the key.
-// The key is confirmed only once the login worked, so a failed call leaves it unconfirmed (spec 4
-// step 6).
+// standing logs in a fresh device of the pairing's listener account under the owner's standing
+// lock, then confirms the key. It first makes the account when it does not exist yet (the
+// pairing's first call, or a pairing made before decision 42). The key is confirmed only once the
+// login worked, so a failed call leaves it unconfirmed (spec 4 step 6).
+//
+// The confirmation also checks that the account is still this pairing's. Two re-pairs of one key
+// both take its name, and the other one may be confirmed through another route (those do not take
+// the standing lock) between this login and this confirmation; the account then moved to it. The
+// login is then undone, nothing is confirmed, and the call tries again, which gives this pairing
+// a fresh name (decision 42).
 func (s *Server) standing(ctx context.Context, c caller) (wire.Standing, string, *wire.APIError) {
-	uid := s.Cfg.mxid(wire.StandingLocalpart(c.owner))
-	dev := "KWAK-" + c.pairing
 	unlock := s.lock("standing|" + c.owner)
 	defer unlock()
-	var e *wire.APIError
+	for range 2 {
+		out, replaced, moved, e := s.standingOnce(ctx, c)
+		if !moved {
+			return out, replaced, e
+		}
+		s.Log.Warn("listener account moved to another pairing during the login, trying a fresh name", "pairing", c.pairing)
+	}
+	return wire.Standing{}, "", internalErr
+}
+
+// errMoved rolls back a confirmation whose listener account moved to another pairing.
+var errMoved = errors.New("listener account moved to another pairing")
+
+// standingOnce is one try of standing. The caller holds the owner's standing lock.
+func (s *Server) standingOnce(ctx context.Context, c caller) (out wire.Standing, replaced string, moved bool, e *wire.APIError) {
+	dev := "KWAK-" + c.pairing
 	s.Store.View(func(st *State) { e = st.pairingErr(c.pairing, s.now()) })
 	if e != nil {
-		return wire.Standing{}, "", e
+		return wire.Standing{}, "", false, e
 	}
+	lp, e := s.ensureListener(ctx, c.owner, c.pairing)
+	if e != nil {
+		s.closeRevokedListeners(ctx, c.owner)
+		return wire.Standing{}, "", false, e
+	}
+	uid := s.Cfg.mxid(lp)
 	if err := s.HS.LogoutDevice(ctx, uid, dev); err != nil && !clientErr(err) {
-		return wire.Standing{}, "", newErr(wire.ErrHomeserver, hsErrcode(err))
+		return wire.Standing{}, "", false, newErr(wire.ErrHomeserver, hsErrcode(err))
 	}
 	l, err := s.HS.Login(ctx, uid, dev)
 	if err != nil {
-		return wire.Standing{}, "", newErr(wire.ErrHomeserver, hsErrcode(err))
+		return wire.Standing{}, "", false, newErr(wire.ErrHomeserver, hsErrcode(err))
 	}
-	var replaced string
 	revoked := false
 	err = s.Store.Update(func(st *State) error {
 		p := st.Pairings[c.pairing]
@@ -265,16 +309,24 @@ func (s *Server) standing(ctx context.Context, c caller) (wire.Standing, string,
 			return nil
 		}
 		replaced = s.confirmLocked(st, c.pairing, p, s.now())
+		if a := st.Agents[lp]; a == nil || a.Pairing != c.pairing || !a.Open() {
+			return errMoved
+		}
 		return nil
 	})
+	moved = errors.Is(err, errMoved)
 	if err != nil || revoked {
 		s.HS.LogoutDevice(context.WithoutCancel(ctx), uid, dev)
-		if err != nil {
-			return wire.Standing{}, "", internalErr
+		switch {
+		case moved:
+			return wire.Standing{}, "", true, nil
+		case err != nil:
+			return wire.Standing{}, "", false, internalErr
 		}
-		return wire.Standing{}, "", errBadKey
+		s.closeRevokedListeners(ctx, c.owner)
+		return wire.Standing{}, "", false, errBadKey
 	}
-	return wire.Standing{UserID: uid, AccessToken: l.AccessToken, DeviceID: dev}, replaced, nil
+	return wire.Standing{UserID: uid, AccessToken: l.AccessToken, DeviceID: dev}, replaced, false, nil
 }
 
 func (s *Server) handleUnpair(w http.ResponseWriter, r *http.Request, c caller) {
@@ -293,7 +345,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, c caller) {
 	var me wire.Me
 	s.Store.View(func(st *State) {
 		p := st.Pairings[c.pairing]
-		me = wire.Me{Owner: c.owner, PairingID: c.pairing, Machine: p.Machine, KeyExpiresAt: p.Expires}
+		me = wire.Me{Owner: c.owner, PairingID: c.pairing, Machine: p.Machine, KeyExpiresAt: p.Expires, Test: p.Test}
 		if o := st.Owners[c.owner]; o != nil {
 			me.Settings = o.Settings
 		}

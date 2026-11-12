@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/fcanela/kwak/internal/check"
 	"github.com/fcanela/kwak/internal/matrix"
 	"github.com/fcanela/kwak/internal/render"
 	"github.com/fcanela/kwak/internal/wire"
@@ -323,6 +324,13 @@ func (l *Listener) missedLocked() {
 // routeEvents routes events in order and queues their deliveries. A thread root that Route
 // could not attribute after a state reset is fetched once (spec 5.4).
 func (l *Listener) routeEvents(ctx context.Context, m Matrix, evs []matrix.Event) {
+	if len(evs) == 0 {
+		return
+	}
+	_, in := l.checkPaths()
+	l.mu.Lock()
+	l.checkIn = in
+	l.mu.Unlock()
 	for _, ev := range evs {
 		l.mu.Lock()
 		ds := Route(ev, l.idx)
@@ -345,39 +353,83 @@ func (l *Listener) routeEvents(ctx context.Context, m Matrix, evs []matrix.Event
 	}
 }
 
-// applyLocked queues an event's deliveries and clears the question it answers.
+// applyLocked queues an event's deliveries, clears the question it answers and, for a person's
+// message in a thread, the thread's loop count (5.15). Only room messages of the agents room count:
+// a reaction, any other event type or another room changes nothing. Before a message reaches an
+// inbox it passes the checks (5.16): a secret holds it at once; with an incoming check command it
+// waits for that command, off the lock.
 func (l *Listener) applyLocked(ev matrix.Event, ds []Delivery) {
+	if ev.Type != "m.room.message" || ev.RoomID != l.roomID() {
+		return
+	}
 	c, ok := parseContent(ev.Content)
 	if !ok {
 		return
 	}
 	if c.relType == relThread {
-		if q := l.st.Questions[c.relEvent]; q != nil && q.Asker != ev.Sender {
-			delete(l.st.Questions, c.relEvent)
+		for _, qs := range []map[string]*question{l.st.Questions, l.st.OpenQs} {
+			if q := qs[c.relEvent]; q != nil && q.Asker != ev.Sender {
+				delete(qs, c.relEvent)
+			}
+		}
+		if n := l.turnsLocked(c.relEvent); n > 0 && l.person(ev.Sender) {
+			delete(l.st.Turns, c.relEvent)
+			l.dirty = true
+			l.log.Info("loop count reset by a person", "thread", c.relEvent, "turns", n)
+			l.resetTriggerLocked(c.relEvent)
 		}
 	}
 	root := ""
 	if c.relType == relThread {
 		root = c.relEvent
 	}
+	if len(ds) == 0 {
+		return
+	}
+	msg := render.Item{EventID: ev.EventID, Sender: ev.Sender, ThreadRoot: root, SentAt: time.UnixMilli(ev.TS).UTC(), Body: c.body}
+	if kind := scanText(c.body); kind != "" {
+		l.holdLocked(msg, ds, "secrets", check.SecretReason(kind))
+		return
+	}
+	if l.checkIn != "" {
+		l.waitCheckLocked(msg, ds)
+		return
+	}
+	l.deliverLocked(msg, ds)
+}
+
+// targetLocked is the queue a delivery of msg goes to, the helper whose queue it is ("" for the
+// session's agent), and the item as queued there.
+func (l *Listener) targetLocked(s *session, d Delivery, msg render.Item) (*queue, string, render.Item) {
+	it := msg
+	it.Reason = d.Reason
+	it.OwnThread = msg.ThreadRoot != "" && l.st.Roots[msg.ThreadRoot] == d.UserID
+	if d.Helper != "" {
+		h := s.Helpers[d.Helper]
+		switch {
+		case h != nil && h.Bound != "" && !h.Finished:
+			return &h.Inbox, d.Helper, it
+		case h != nil && h.Finished:
+			it.Helper, it.Note = d.Helper, "which has finished"
+		default:
+			it.Helper = d.Helper
+		}
+	}
+	return &s.Inbox, "", it
+}
+
+// deliverLocked queues msg for each delivery and applies the resume trigger (5.11). A queue that
+// got msg's hold notice never gets msg itself, even when a check passes it on a later routing.
+func (l *Listener) deliverLocked(msg render.Item, ds []Delivery) {
+	root := msg.ThreadRoot
 	for _, d := range ds {
 		s := l.st.Sessions[d.Session]
 		if s == nil {
 			continue
 		}
-		it := render.Item{EventID: ev.EventID, Sender: ev.Sender, ThreadRoot: root,
-			SentAt: time.UnixMilli(ev.TS).UTC(), Reason: d.Reason, Body: c.body}
-		q := &s.Inbox
-		if d.Helper != "" {
-			h := s.Helpers[d.Helper]
-			switch {
-			case h != nil && h.Bound != "" && !h.Finished:
-				q = &h.Inbox
-			case h != nil && h.Finished:
-				it.Helper, it.Note = d.Helper, "which has finished"
-			default:
-				it.Helper = d.Helper
-			}
+		q, _, it := l.targetLocked(s, d, msg)
+		if q.has(heldID(msg.EventID)) {
+			continue
 		}
 		if q.add(it) {
 			l.dirty = true

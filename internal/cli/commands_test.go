@@ -34,9 +34,15 @@ func TestStatus(t *testing.T) {
 	for _, want := range []string{
 		"Listener: syncing, last sync 2026-11-02 10:41 UTC (kwak 0.1.0)",
 		"Pairing: fcanela on laptop, pairing 3f9a1c2e, server https://kwak.test",
+		"Listener account: " + wiretest.StandingUser, // decision 42
 		"Key valid until: 2027-01-31",
 		"Owner settings: background resume off, question timeout 15m",
 		"Resume: background resume: Claude only; 1 runs, 0 running",
+		"Loop ceiling: no more background runs for thread $Qx1abc after 50; a message from a person in it starts the count again",
+		"Hourly limit: 300 background runs started in the last hour; the next may start at 2026-11-02 11:20 UTC",
+		"Checks: secrets scan on; outgoing command off; incoming command /opt/kwak/check-in; 1 waiting for the incoming check",
+		"  2026-11-02 10:30 UTC refused a reply by " + wiretest.ClaudeAgent + " in thread $Qx1abc (not sent): it looks like it holds a secret (a GitHub token)",
+		"  2026-11-02 10:35 UTC held a message from " + wiretest.OtherAgent + " in thread $Qx1abc for " + wiretest.ClaudeAgent + ": it asks for an action",
 		"Caller checks: peer",
 		"Sessions: 2",
 		"  claude:" + wiretest.ClaudeSession + " in /home/u/src/app",
@@ -71,6 +77,10 @@ func TestStatusStates(t *testing.T) {
 			if !strings.Contains(out, w) {
 				t.Errorf("%s: lacks %q:\n%s", row, w, out)
 			}
+		}
+		// No POST /standing worked yet, so no listener account is named.
+		if strings.Contains(out, "Listener account") {
+			t.Errorf("%s: names a listener account:\n%s", row, out)
 		}
 	}
 }
@@ -167,6 +177,53 @@ func TestConfigResumeExe(t *testing.T) {
 	}
 	if code, _, _ := r.run(r.cli.Config, "", "resume-exe", "--harness", "gemini"); code != 1 {
 		t.Error("unknown harness accepted")
+	}
+}
+
+// The check commands (spec 5.16): absolute paths only, kept next to unknown fields, and "off"
+// turns one off again.
+func TestConfigCheck(t *testing.T) {
+	r := newRig(t)
+	bin := filepath.Join(t.TempDir(), "check.sh")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errs := r.run(r.cli.Config, "", "check-outgoing", bin); code != 1 || !strings.Contains(errs, "not paired") {
+		t.Errorf("unpaired: exit %d: %s", code, errs)
+	}
+	r.paired()
+	for _, which := range []string{"check-outgoing", "check-incoming"} {
+		key := strings.Replace(which, "-", "_", 1)
+		code, out, errs := r.run(r.cli.Config, "", which, bin)
+		if code != 0 || !strings.Contains(out, "Recorded "+bin) || r.config()[key] != bin {
+			t.Fatalf("%s: exit %d: %s %s, config %v", which, code, out, errs, r.config()[key])
+		}
+		rel := filepath.Base(bin)
+		if code, _, errs := r.run(r.cli.Config, "", which, rel); code != 1 || !strings.Contains(errs, "not an absolute path") {
+			t.Errorf("%s: a relative path was accepted: exit %d %s", which, code, errs)
+		}
+		if code, _, _ := r.run(r.cli.Config, "", which, filepath.Dir(bin)); code != 1 {
+			t.Errorf("%s: a directory was accepted", which)
+		}
+		if code, _, _ := r.run(r.cli.Config, "", which, filepath.Join(t.TempDir(), "missing")); code != 1 {
+			t.Errorf("%s: a missing file was accepted", which)
+		}
+		if r.config()[key] != bin {
+			t.Errorf("%s: a refused path changed the config: %v", which, r.config()[key])
+		}
+		if code, _, _ := r.run(r.cli.Config, "", which); code != 2 {
+			t.Errorf("%s: no path: exit %d", which, code)
+		}
+	}
+	if r.config()["future_field"] == nil || r.config()["resume_exe"] == nil {
+		t.Error("other fields lost")
+	}
+	code, out, _ := r.run(r.cli.Config, "", "check-outgoing", "off")
+	if _, set := r.config()["check_outgoing"]; code != 0 || set || !strings.Contains(out, "is off") {
+		t.Errorf("off: exit %d %q, config %v", code, out, r.config())
+	}
+	if r.config()["check_incoming"] != bin {
+		t.Error("turning the outgoing check off changed the incoming one")
 	}
 }
 
@@ -297,5 +354,34 @@ func TestRunnable(t *testing.T) {
 	}
 	if runnable(fi, dir+".exe", true) || runnable(fi, dir, false) {
 		t.Error("a directory is runnable")
+	}
+}
+
+// resume-per-hour (decision 38, spec 5.11): a whole number of 1 or more, kept next to the other
+// fields; a refused value changes nothing.
+func TestConfigResumePerHour(t *testing.T) {
+	r := newRig(t)
+	if code, _, errs := r.run(r.cli.Config, "", "resume-per-hour", "50"); code != 1 || !strings.Contains(errs, "not paired") {
+		t.Errorf("unpaired: exit %d: %s", code, errs)
+	}
+	r.paired()
+	code, out, errs := r.run(r.cli.Config, "", "resume-per-hour", "50")
+	if code != 0 || !strings.Contains(out, "Recorded 50 background resume runs per hour") || r.config()["resume_per_hour"] != 50.0 {
+		t.Fatalf("exit %d: %s %s, config %v", code, out, errs, r.config()["resume_per_hour"])
+	}
+	if r.config()["future_field"] == nil || r.config()["thread_ceiling"] != 7.0 || r.config()["resume_max"] != 3.0 {
+		t.Error("other fields lost")
+	}
+	for _, bad := range [][]string{{"0"}, {"-3"}, {"many"}, {"1.5"}, {}, {"5", "6"}} {
+		code, _, errs := r.run(r.cli.Config, "", append([]string{"resume-per-hour"}, bad...)...)
+		if code != 2 || !strings.Contains(errs, "usage: kwak config resume-per-hour <n>") {
+			t.Errorf("%q: exit %d: %s", bad, code, errs)
+		}
+	}
+	if r.config()["resume_per_hour"] != 50.0 {
+		t.Errorf("a refused value changed the config: %v", r.config()["resume_per_hour"])
+	}
+	if code, _, _ := r.run(r.cli.Config, "", "resume-per-hour", "1"); code != 0 || r.config()["resume_per_hour"] != 1.0 {
+		t.Errorf("1: exit %d, config %v", code, r.config()["resume_per_hour"])
 	}
 }

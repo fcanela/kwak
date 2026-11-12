@@ -40,10 +40,10 @@ func newIndex(st *state, room string) *Index {
 
 // Delivery is one message for one local agent.
 type Delivery struct {
-	UserID  string
-	Session string
-	Helper  string
-	Reason  render.Reason
+	UserID  string        `json:"user_id"`
+	Session string        `json:"session"`
+	Helper  string        `json:"helper,omitempty"`
+	Reason  render.Reason `json:"reason"`
 }
 
 const (

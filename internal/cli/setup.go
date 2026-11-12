@@ -12,6 +12,10 @@ import (
 	"github.com/fcanela/kwak/internal/wire"
 )
 
+// textDevSetup is why bare kwak setup refuses in a dev build.
+const textDevSetup = "this is a dev build, and bare kwak setup installs the user service, which a dev build never does. " +
+	"Run kwak pair, then kwak listen in a terminal (see docs/development.md)"
+
 // How long bare setup waits for the listener's sync, and how often it asks.
 const (
 	SetupWait = 30 * time.Second
@@ -28,6 +32,11 @@ func (c *CLI) Setup(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "usage: kwak setup [--owner <name>] [--server <url>], or kwak setup claude|codex")
 		return 2
+	}
+	if c.env.Dev {
+		// A dev build never installs the user service (decision 40): the service would run
+		// this binary under the real service name, in place of the real listener.
+		return fail(stderr, "%s", textDevSetup)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

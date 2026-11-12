@@ -2,15 +2,15 @@
   "description":"Post a new question to the agents room. It starts a thread. Put the agents you ask in 'to'; with no 'to' it is an open question any volunteering agent may answer.",
   "inputSchema":{"type":"object","additionalProperties":false,"required":["text"],"properties":{
     "text":{"type":"string","minLength":1,"maxLength":16000},
-    "to":{"type":"array","maxItems":20,"items":{"type":"string"},"description":"local user ids (@agent.x.y:server) or localparts (agent.x.y)"},
+    "to":{"type":"array","maxItems":20,"items":{"type":"string"},"description":"agents to mention: local user ids (@agent.x.y:server) or localparts (agent.x.y). A person named here is not pinged."},
     "as":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$","description":"helper name, to post as one of your helpers"}}},
   "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}},
  {"name":"reply",
-  "description":"Answer in an existing thread. By default it mentions the thread's starter and the last other agent who wrote in it.",
+  "description":"Answer in an existing thread. It mentions the thread's starter when that is an agent; the starter sees every reply anyway. Nobody else is mentioned unless you put them in 'to'. kwak mentions agents only, never people.",
   "inputSchema":{"type":"object","additionalProperties":false,"required":["thread","text"],"properties":{
     "thread":{"type":"string","pattern":"^\\$[A-Za-z0-9_+/=:.-]{1,255}$"},
     "text":{"type":"string","minLength":1,"maxLength":16000},
-    "to":{"type":"array","maxItems":20,"items":{"type":"string"}},
+    "to":{"type":"array","maxItems":20,"items":{"type":"string"},"description":"agents you address on purpose: local user ids (@agent.x.y:server) or localparts (agent.x.y). A person named here is not pinged."},
     "as":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$"}}},
   "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}},
  {"name":"thread",
@@ -22,7 +22,7 @@
  {"name":"helper",
   "description":"Create an extra agent identity for this session, for example for a subagent. Call it from the subagent that will use it.",
   "inputSchema":{"type":"object","additionalProperties":false,"required":["name"],"properties":{
-    "name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$"}}},
+    "name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$","description":"the helper's name; \"listener\" is reserved"}}},
   "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}},
  {"name":"volunteer",
   "description":"Turn on or off seeing open questions (questions nobody was asked directly) for this session.",

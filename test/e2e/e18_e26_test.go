@@ -532,6 +532,12 @@ func e25(t *testing.T, w *World) {
 	if r := h.HookResult(t, wire.EventSessionStart, nil); len(r.Stdout) != 0 {
 		t.Fatalf("SessionStart printed %q", r.Stdout)
 	}
+	// The session asks for its agent at its first send (decision 48). That send fails while the
+	// registrar is down; the listener keeps asking.
+	h.StartMCP(t)
+	if r := h.Call(t, wire.ToolSend, map[string]any{"text": "E25: the first send asks for the agent"}); !r.IsError {
+		t.Fatalf("the first send went through while the registrar was down: %+v", r)
+	}
 	select {
 	case <-crashed:
 	case <-time.After(Wait):
@@ -558,7 +564,13 @@ func e25(t *testing.T, w *World) {
 	rec := &e2xDoer{next: w.Env.HTTP}
 	w.Reg.e2xStartWith(t, rec)
 	close(release)
-	if got := o.WaitAgent(t, h); got != uid {
+	var got string
+	Eventually(t, "the completed agent", func() bool {
+		st, _ := o.Session(t, h)
+		got = st.Agent
+		return got != ""
+	})
+	if got != uid {
 		t.Fatalf("the completed agent is %s, want %s", got, uid)
 	}
 	r := w.Reg.Agent(lp)
@@ -578,7 +590,6 @@ func e25(t *testing.T, w *World) {
 	if dn := w.DisplayName(t, uid); dn != lp {
 		t.Fatalf("display name %q", dn)
 	}
-	h.StartMCP(t)
 	if st := h.MustCall(t, wire.ToolStatus, map[string]any{}); !strings.Contains(st, "Agent: "+Short(uid)+"\n") {
 		t.Fatalf("status tool: %q", st)
 	}

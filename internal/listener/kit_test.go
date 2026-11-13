@@ -809,9 +809,17 @@ func (e *env) start(pid int, h wire.Harness, sid, source, cwd string) wire.HookR
 	return e.hook(pid, r)
 }
 
-// waitAgent waits until the session's agent is minted.
+// waitAgent gives the session its agent, as its first send, reply or helper call does (decision
+// 48), and waits until it is minted.
 func (e *env) waitAgent(key string) string {
 	e.t.Helper()
+	e.l.mu.Lock()
+	s := e.l.st.Sessions[key]
+	has := s != nil && s.Agent != "" && e.l.tokens[s.Agent] != "" && !s.AgentClosed
+	e.l.mu.Unlock()
+	if !has {
+		e.l.ensure(key, "")
+	}
 	for i := 0; i < 2000; i++ {
 		e.l.mu.Lock()
 		s := e.l.st.Sessions[key]

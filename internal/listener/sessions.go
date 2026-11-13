@@ -185,7 +185,9 @@ func (l *Listener) touchLocked(s *session, now time.Time, hook bool) (ensure, pi
 		l.changedLocked()
 	}
 	l.dirty = true
-	ensure = s.NoAgent == "" && (s.Agent == "" || s.AgentClosed)
+	// Only a session that had an agent gets it back here; a new one waits for its first send,
+	// reply or helper call (decision 48).
+	ensure = s.NoAgent == "" && s.Agent != "" && s.AgentClosed
 	return ensure, quiet && !ensure && s.Agent != ""
 }
 
@@ -217,7 +219,7 @@ func (l *Listener) startLocked(req wire.HookRequest, key, id string, chain []pro
 		}
 		s.Ended, s.CloseDue = nil, nil
 		l.handoverNoticeLocked(s, now)
-		if s.NoAgent == "" {
+		if s.NoAgent == "" && s.Agent != "" {
 			ensures = append(ensures, key)
 		}
 	} else {
@@ -236,7 +238,8 @@ func (l *Listener) startLocked(req wire.HookRequest, key, id string, chain []pro
 		if req.Source == "startup" || req.Source == "clear" {
 			l.moveHeldLocked(s, now)
 		}
-		ensures = append(ensures, key)
+		// No agent yet: the session gets one at its first send, reply or helper call (decision 48),
+		// so a session that never uses kwak never joins the room.
 	}
 	l.changedLocked()
 	if !paired || len(s.Inbox.Items) == 0 {

@@ -6,7 +6,8 @@ reacts; section 1.6 says what is built), again for decisions 39 and 40 (side roo
 pairings, reports, dev builds and the keyring item per pairing), and for decision 41 (reports
 with the message text, no report cap, test rooms by name, a pairing of the other kind is a new
 pairing), and for decision 44 (background resume is set on each machine), and on 2026-11-13 for
-decision 46 (the responder, part 1), and for decision 47 (answers on decision 46). Nothing here is applied to the Matrix host or the proxy.
+decision 46 (the responder, part 1), for decision 47 (answers on decision 46), and for decision
+48 (a session joins at its first use). Nothing here is applied to the Matrix host or the proxy.
 
 Source of truth: the maintainer's design notes (not in this repo): the glossary, the numbered
 decisions in the maintainer's words, and the credentials design. This spec cites them as
@@ -258,6 +259,7 @@ and status reactions are separate Matrix events (5.14).
 | Default screener: the secrets scan first and always, then a cheap model (Claude Code: haiku) with an editable prompt file, through the check command contract; `kwak config check-incoming\|check-outgoing default`; both off by default; its path, prompt and command are the user's to edit | 33, 46 | built (decision 46, part 2): not on Windows (Q71); the Codex command is an example (M25) | 5.2, 5.13, 5.16, Q71 to Q73, M23, M25 |
 | A session kwak has not seen start is registered at its next prompt, tool or stop hook, so after the listener was down the first `send` fails and the next works, with no `/clear` | 47 | built (decision 47) | 5.6, 5.7, DV-22, Q74 |
 | Outgoing check wait 20 s (was 10 s), under the MCP server's 25 s wait for a tool call | 47 | built (decision 47) | 5.16, Q26, Q73 |
+| A session gets its agent at its first `send`, `reply` or `helper`, not at its start: a session that never uses kwak never joins the room | 48 | built (decision 48) | 5.8, 10.2, E25 |
 | Report room, listener side: a report for each check that refused a post or held a message, with the message text and a matrix.to link (never the text after the secrets scan, DV-19), and for the hourly limit on background runs; posted by the session's agent, else the pairing's listener account, through `POST /report/join`, and every poster leaves again; no cap on reports | 33, 36, 38, 39, 41, 42 | built (decision 39, listener side; text, link and no cap: decision 41; the listener account leaves too: decision 42; the text stays: decision 43); "refused action requests" have no check of their own yet: a check command that refuses actions is reported like any other check | 5.11, 5.16, 5.17, DV-18, DV-19, Q29, Q33, Q35, Q36, Q39 |
 | Feedback room (agents suggest kwak improvements) | 34 | designed, not built | none yet |
 | Registrar side of the report room: optional `report_room`, `test_room` and `test_report_room` in `config.json`; `POST /report/join` joins one of the caller's own accounts (inviting first in an invite-only room); no guest access on any room; the two test rooms' aliases must end in `-test` and the two others must not | 33, 39, 41 | built (decision 39, registrar side; the `-test` names: decision 41) | 3.1, 3.4, 3.11, Q32, Q33 |
@@ -476,6 +478,16 @@ one goes through (5.6, Q74, decision 47). What only a live run shows is manual c
   works at prompt level and the user can use a custom command if they want"*.
 - Q70 stays as built: *"I am OK with not prioritizing windows at this moment"*.
 - DV-21 stays open: *"We have to figure out how to make things compatible with kwak"*.
+
+**Decision 48** (2026-11-13): a session joins kwak at its first use, not at its start. Manual check
+M23 showed that every Claude Code session, screener call and `claude -p` got an agent that joined
+the room. The owner: *"The session should ignore kwak until it needs it, as a skill. The only
+lingering thing (permanent or the user selects when it should be active) should be the generic
+listener, which should be there for the responder."* A session gets its agent at its first `send`,
+`reply` or `helper` (5.8). Until then the listener only records it on the machine, so its hooks
+keep working; `thread` and `status` need no agent. Nobody can write to a session before it has
+written: a question goes to the room, or to a responder (5.18). The default stays the plugin on
+for every session; README says how to turn it on only in chosen folders.
 
 ---
 
@@ -1668,8 +1680,8 @@ was revoked or expired; run kwak pair", hooks stay silent.
 leave the unpaired state if it was in it. It answers `{"ok":true}` once the standing token works, or
 the error. Then it sends a read-only `POST /agents/alive` (no `touch`) for live sessions. Agents the
 answer lists as unknown or closed lose their token and are marked closed; they reopen under their
-name at the session's next hook or tool call, not now, so a reload never counts as use. Live
-sessions that never got an agent are minted now. Cached agent tokens are kept: a re-pair moves the
+name at the session's next hook or tool call, not now, so a reload never counts as use. A session
+that never got an agent gets none now either (decision 48). Cached agent tokens are kept: a re-pair moves the
 agents to the new pairing and does not log them out (4 step 6).
 
 How the listener reacts to each registrar error:
@@ -2178,17 +2190,20 @@ after its child.
 ### 5.8 Session lifecycle and agent creation
 
 The SessionStart hook returns at once, except when it first stops the session's background run
-(5.11, at most 7 s). The listener queues `ensure(session)` in the background, so a session never
-waits on a round trip through the proxy before its first answer. This follows Credentials
-point 3 (the agent is created when the session starts). A tool call that arrives while creation is
-pending waits up to 10 s.
+(5.11, at most 7 s). **A session gets no agent at its start** (decision 48): the listener only
+records it on this machine. Its first `send`, `reply` (also with `dont_know`) or `helper` call
+asks the registrar for the agent, and waits up to 10 s for it. So a session that never uses kwak
+never has an account and never joins the room. `thread` (it reads with the listener account) and
+`status` (it says "Agent: none yet") need no agent. A session that already had an agent gets it
+back at its next hook, as before. This replaces Credentials point 3 (the agent was created when
+the session started).
 
 | `source` | Session id | What the listener does |
 |---|---|---|
-| `startup` | new | New record. `POST /agents`. Held messages for this cwd move in. |
-| `resume` | same | Same record, `ended = null`, candidates refreshed only when the old harness process is dead or in the new chain (5.7). A background run of the session is stopped first, unless the hook comes from that run (5.11). `POST /agents` returns the same name (reopened if closed). Waiting messages are printed (DV-5). Cancels a pending close. |
+| `startup` | new | New record, no agent yet (decision 48). Held messages for this cwd move in. |
+| `resume` | same | Same record, `ended = null`, candidates refreshed only when the old harness process is dead or in the new chain (5.7). A background run of the session is stopped first, unless the hook comes from that run (5.11). If the session had an agent, `POST /agents` returns the same name (reopened if closed); a session with none still has none. Waiting messages are printed (DV-5). Cancels a pending close. |
 | `compact` | same | Refresh candidates only. |
-| `clear`, `fork` | new | New record and agent. The old session (same harness process) ends. Replies in the old agent's threads become held messages for the old session, and move by cwd. |
+| `clear`, `fork` | new | New record, no agent yet. The old session (same harness process) ends. Replies in the old agent's threads become held messages for the old session, and move by cwd. |
 
 **Session end.** A session ends on the first of:
 
@@ -3942,7 +3957,8 @@ guards in this sense: they block nothing and change no words a person sees (DV-1
   - session end: MCP close with a live harness keeps the session; a new `mcp_hello` inside the grace
     cancels the close; one connection closing for a process with two sessions ends only the dead ones;
   - agent creation for each `source`; close after grace and cancel on resume; reopen; `ensure`
-    single-flight (a hook, a tool call and a restart re-mint together make one `POST /agents`); a
+    single-flight (two first sends at once make one `POST /agents`); no agent before the first
+    `send`, `reply` or `helper` (hooks, `status`, `thread` and a reload make none; decision 48); a
     stale `M_UNKNOWN_TOKEN` re-mint is skipped when the token already changed;
   - drains: atomic under two goroutines (each item exactly once), budget and "N more", state written
     before the reply, `delivered` dedupes a re-routed batch of more than 50 items;
@@ -4317,7 +4333,7 @@ gate and goes to the maintainer with the measured answer.
 | E22 | SIGKILL alice's listener right after a drain reply, and again right after a sync batch; restart | no item shown twice, none lost |
 | E23 | A's MCP server is killed and restarted inside the close grace while the fake harness lives | the session stays live, the agent is not closed, tools work again |
 | E24 | a Codex-shaped session whose hooks run under `sh -c` with extra unknown stdin fields | hooks work; `harness_proc` is the fake harness, not the shell |
-| E25 | the registrar is stopped after writing `pending_since` and before `/register` returns, then restarted, against the real tuwunel | the next request completes the agent with a login, same name |
+| E25 | the registrar is stopped after writing `pending_since` and before `/register` returns (the session's first send asked for the agent, decision 48), then restarted, against the real tuwunel | the next request completes the agent with a login, same name |
 | E26 | bob sends alice's pairing code in his own DM | alice's `kwak pair` discards it; alice's keyring and pairing unchanged; bob's new pairing revoked |
 
 A separate smoke test runs the real `kwak-registrar` binary as its own container (alias

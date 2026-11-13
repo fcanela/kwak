@@ -82,6 +82,35 @@ func TestSessionStartedWhileListenerDown(t *testing.T) {
 	}
 }
 
+// A session joins kwak at its first send, reply or helper call, not at its start (decision 48):
+// hooks, status, thread and a reload make no agent.
+func TestSessionGetsAgentAtFirstUse(t *testing.T) {
+	e := newEnv(t)
+	e.connect()
+	h := e.claudeTree(100)
+	e.child(h, 110)
+	c := e.mcp(e.child(h, 120).PID, "claude", "")
+	e.start(110, "claude", sid1, "startup", cwd)
+	e.hook(110, hookReq("claude", wire.EventPrompt, sid1, cwd))
+	e.hook(110, hookReq("claude", wire.EventPostTool, sid1, cwd))
+	e.hook(110, hookReq("claude", wire.EventStop, sid1, cwd))
+	if r := e.tool(c, "status", `{}`); r.IsError || !strings.HasPrefix(r.Text, "Agent: none yet\n") {
+		t.Fatalf("status: %+v", r)
+	}
+	e.tool(c, "thread", `{"thread":"$nothere"}`)
+	e.l.reensure()
+	time.Sleep(20 * time.Millisecond)
+	if n := e.reg.agentCalls(); n != 0 {
+		t.Fatalf("%d POST /agents before the session used kwak", n)
+	}
+	if r := e.tool(c, "send", `{"text":"which port?"}`); r.IsError {
+		t.Fatalf("first send: %+v", r)
+	}
+	if n := e.reg.agentCalls(); n != 1 || e.session(k1).Agent == "" {
+		t.Fatalf("after the first send: %d POST /agents, agent %q", n, e.session(k1).Agent)
+	}
+}
+
 // A later hook with no folder registers nothing.
 func TestLaterHookWithoutFolder(t *testing.T) {
 	e := newEnv(t)
@@ -409,10 +438,12 @@ func TestEnsureSingleFlight(t *testing.T) {
 	e.reg.gate = make(chan struct{})
 	e.start(110, "claude", sid1, "startup", cwd)
 	done := make(chan wire.ToolResponse)
-	go func() { done <- e.tool(c, "status", `{}`) }()
-	go e.l.reensure()
+	for range 2 {
+		go func() { done <- e.tool(c, "send", `{"text":"which port?"}`) }()
+	}
 	eventually(t, "the first call", func() bool { return e.reg.agentCalls() == 1 })
 	close(e.reg.gate)
+	<-done
 	<-done
 	e.waitAgent(k1)
 	if n := e.reg.agentCalls(); n != 1 {

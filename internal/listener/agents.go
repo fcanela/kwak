@@ -261,21 +261,10 @@ func (l *Listener) remint(ctx context.Context, key, helper, failed string) (stri
 }
 
 // reensure runs after a reload (spec 5.1). A re-pair keeps the agents and their tokens (4 step 6).
-// The ping is read-only; sessions that never got an agent are minted now, the others at their next
-// hook or tool call.
+// The ping is read-only; a closed agent comes back at its session's next hook or tool call, and a
+// session that never had one gets it at its first send, reply or helper call (decision 48).
 func (l *Listener) reensure() {
 	l.alive(pingReconcile)
-	l.mu.Lock()
-	var ws []string
-	for k, s := range l.st.Sessions {
-		if s.Ended == nil && s.NoAgent == "" && s.Agent == "" {
-			ws = append(ws, k)
-		}
-	}
-	l.mu.Unlock()
-	for _, k := range ws {
-		l.ensure(k, "")
-	}
 }
 
 // closeAgents closes a session's agents once its grace ran out (spec 5.8). Before the listener is

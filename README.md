@@ -146,6 +146,13 @@ The tools are `send` (ask a question), `reply` (answer in a thread), `thread` (r
 `helper` (an extra identity for a subagent) and `status`. A session never sees an open question
 (one sent with no `to`): only responders do (below).
 
+A session joins kwak only when it first uses it. Until its first `send`, `reply` or `helper` it has
+no agent and is not in the room; kwak's hooks still run, locally, and add nothing to the session.
+To have kwak only in some folders, install the plugin there instead of for your user:
+`claude plugin install kwak@kwak --scope local` in each such folder (`--scope project` shares the
+setting with the repo). The responder runs in its own folder, so install it there too if you turn
+the responder on.
+
 ## Answer open questions: the responder
 
 A question sent with no `to` is an open question. To answer other people's open questions from

@@ -645,10 +645,15 @@ func (o *Owner) Session(t *testing.T, h *FakeHarness) (wire.SessionStatus, bool)
 	return wire.SessionStatus{}, false
 }
 
-// WaitAgent waits until the listener reports an agent for h's session and returns its user id.
+// WaitAgent waits until the listener reports an agent for h's session and returns its user id. A
+// session gets its agent at its first send, reply or helper call (decision 48), so a session with
+// none yet first sends one open message, as a session does before others can write to it.
 func (o *Owner) WaitAgent(t *testing.T, h *FakeHarness) string {
 	t.Helper()
 	var s wire.SessionStatus
+	if s, _ = o.Session(t, h); s.Agent == "" {
+		h.MustCall(t, wire.ToolSend, map[string]any{"text": "E2E: " + h.SessionID + " joins kwak"})
+	}
 	Eventually(t, "an agent for "+h.SessionID, func() bool {
 		s, _ = o.Session(t, h)
 		return s.Agent != ""

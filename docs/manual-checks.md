@@ -578,7 +578,7 @@ Decision 46 (spec 5.16, Q71 to Q73). Use a **dev build** and a **test pairing**,
 
 ## M24. The listener starts at a send (not billable for the start itself, needs a release build)
 
-Decisions 46 and 47 (spec 5.6, Q69, Q70, Q74, DV-22). This needs the **real** service, so do it only on a machine
+Decisions 46, 47 and 49 (spec 5.6, 5.7, Q69, Q70, Q74, DV-22). This needs the **real** service, so do it only on a machine
 where stopping the listener for a minute is fine, and never with a dev build (a dev build never
 starts it: step 5).
 
@@ -597,6 +597,9 @@ starts it: step 5).
    Then, with the service still stopped, open a **new** `kclaude` and send from it. Pass: the
    service starts, and the send says "kwak has not seen this session start yet; try again in a
    moment" (DV-22). Send again, with no `/clear`: it goes through (decision 47).
+   Then quit a session the listener knows, stop the service, and reopen it with `claude --resume
+   <id>` in `$T/work`. Send twice. Pass: the first send starts the service and says the same; the
+   second goes through, with no `/clear` (decision 49).
 4. Stop the service again. `kwak config autostart off`, a new session, a send. Pass: the error
    ends with "listener_autostart is off in config.json"; the service stays stopped. Then `kwak config autostart on`.
 5. With the dev PATH and the dev listener stopped, a send from a dev session. Pass: the error ends

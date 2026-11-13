@@ -6,8 +6,9 @@ reacts; section 1.6 says what is built), again for decisions 39 and 40 (side roo
 pairings, reports, dev builds and the keyring item per pairing), and for decision 41 (reports
 with the message text, no report cap, test rooms by name, a pairing of the other kind is a new
 pairing), and for decision 44 (background resume is set on each machine), and on 2026-11-13 for
-decision 46 (the responder, part 1), for decision 47 (answers on decision 46), and for decision
-48 (a session joins at its first use). Nothing here is applied to the Matrix host or the proxy.
+decision 46 (the responder, part 1), for decision 47 (answers on decision 46), for decision
+48 (a session joins at its first use), and for decision 49 (a resume missed while the listener
+was down). Nothing here is applied to the Matrix host or the proxy.
 
 Source of truth: the maintainer's design notes (not in this repo): the glossary, the numbered
 decisions in the maintainer's words, and the credentials design. This spec cites them as
@@ -260,6 +261,7 @@ and status reactions are separate Matrix events (5.14).
 | A session kwak has not seen start is registered at its next prompt, tool or stop hook, so after the listener was down the first `send` fails and the next works, with no `/clear` | 47 | built (decision 47) | 5.6, 5.7, DV-22, Q74 |
 | Outgoing check wait 20 s (was 10 s), under the MCP server's 25 s wait for a tool call | 47 | built (decision 47) | 5.16, Q26, Q73 |
 | A session gets its agent at its first `send`, `reply` or `helper`, not at its start: a session that never uses kwak never joins the room | 48 | built (decision 48) | 5.8, 10.2, E25 |
+| A session resumed in a new process while the listener was down is taken over at its next prompt, tool or stop hook, when its old process is dead, so the first `send` fails and the next works | 49 | built (decision 49) | 5.7, M24 |
 | Report room, listener side: a report for each check that refused a post or held a message, with the message text and a matrix.to link (never the text after the secrets scan, DV-19), and for the hourly limit on background runs; posted by the session's agent, else the pairing's listener account, through `POST /report/join`, and every poster leaves again; no cap on reports | 33, 36, 38, 39, 41, 42 | built (decision 39, listener side; text, link and no cap: decision 41; the listener account leaves too: decision 42; the text stays: decision 43); "refused action requests" have no check of their own yet: a check command that refuses actions is reported like any other check | 5.11, 5.16, 5.17, DV-18, DV-19, Q29, Q33, Q35, Q36, Q39 |
 | Feedback room (agents suggest kwak improvements) | 34 | designed, not built | none yet |
 | Registrar side of the report room: optional `report_room`, `test_room` and `test_report_room` in `config.json`; `POST /report/join` joins one of the caller's own accounts (inviting first in an invite-only room); no guest access on any room; the two test rooms' aliases must end in `-test` and the two others must not | 33, 39, 41 | built (decision 39, registrar side; the `-test` names: decision 41) | 3.1, 3.4, 3.11, Q32, Q33 |
@@ -2175,9 +2177,14 @@ hooks (no shell), and the hook's grandparent for Codex (hooks run under `$SHELL 
 - **A hook kwak has not seen start** (decision 47, Q74): a prompt, post-tool or stop hook whose
   `session_id` is not in `state.json` at all, and that carries a folder, registers the session
   first, as a SessionStart with no `source` would, then is handled as above. This covers a session
-  that started while the listener was down (5.6). A session kwak knows is never taken over this
-  way: the rule above still applies to it. This gives a process no new power, since it could send
-  a SessionStart with the same id and folder.
+  that started while the listener was down (5.6).
+- **A hook kwak has not seen resume** (decision 49): the same for a known session when the
+  caller's chain does not reach it and no process of the session is alive elsewhere (the rule of
+  SessionStart above). The hook takes the session over, as a SessionStart with no `source` would,
+  then delivers its inbox under the hook's own rules. This covers `claude --resume` in a new
+  process while the listener was down. While the old process lives, the rule above still refuses
+  the hook. Neither case gives a process new power, since it could send a SessionStart with the
+  same id and folder.
 - **Nested harnesses** (a `claude -p` run from Bash): the inner one is at depth 1 and the outer one
   deeper. Rule "nearest candidate" keeps them apart.
 - **Subagents:** a hook that carries `agent_id` gets only the inbox of a helper bound to that

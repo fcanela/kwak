@@ -122,13 +122,16 @@ func (l *Listener) hookOp(req wire.HookRequest, chain []proc.ID, claimed bool) w
 			l.subagentStopLocked(s, req.AgentID)
 		}
 	default:
-		if l.st.Sessions[key] == nil && req.Cwd != "" {
-			// kwak missed this session's start, for example because the listener was down then:
-			// register it now, as its SessionStart would have (decision 47, Q74).
-			l.log.Info("session registered at a later hook", "session", key, "event", req.Event)
-			l.startLocked(req, key, id, chain, claimed, now, paired)
+		if s := l.st.Sessions[key]; req.Cwd != "" && (s == nil || !l.inTree(s, chain) && !l.liveElsewhere(s, chain)) {
+			// kwak missed this session's start or resume, for example because the listener was down
+			// then: take it now, as its SessionStart would have (decisions 47 and 49). The delivery
+			// below drains its inbox, under this hook's own rules.
+			l.log.Info("session taken at a later hook", "session", key, "event", req.Event)
+			_, _, ensures = l.startLocked(req, key, id, chain, claimed, now, false)
 		}
-		text, more, ensures, pings = l.deliveryHookLocked(req, key, chain, now, paired)
+		var touched []string
+		text, more, touched, pings = l.deliveryHookLocked(req, key, chain, now, paired)
+		ensures = append(ensures, touched...)
 	}
 	l.mu.Unlock()
 	if !paired {
@@ -151,12 +154,18 @@ func (l *Listener) findLocked(key string, chain []proc.ID) *session {
 	if s == nil {
 		return nil
 	}
-	p := probe(chain, s.Harness)
-	if s.HarnessProc != nil && containsID(p, *s.HarnessProc) || s.HarnessProc == nil && intersects(s.Candidates, p) {
+	if l.inTree(s, chain) {
 		return s
 	}
 	l.log.Info("hook refused: caller is outside the session's process tree", "session", key)
 	return nil
+}
+
+// inTree reports whether the caller's chain reaches the session's harness process, or one of its
+// candidates while none is recorded.
+func (l *Listener) inTree(s *session, chain []proc.ID) bool {
+	p := probe(chain, s.Harness)
+	return s.HarnessProc != nil && containsID(p, *s.HarnessProc) || s.HarnessProc == nil && intersects(s.Candidates, p)
 }
 
 // touchLocked records use of a session by a hook and settles its harness process. ping asks for an
@@ -191,7 +200,9 @@ func (l *Listener) touchLocked(s *session, now time.Time, hook bool) (ensure, pi
 	return ensure, quiet && !ensure && s.Agent != ""
 }
 
-func (l *Listener) startLocked(req wire.HookRequest, key, id string, chain []proc.ID, claimed bool, now time.Time, paired bool) (string, int, []string) {
+// startLocked registers a session, or takes over a known one, as its SessionStart. drain delivers its
+// inbox now.
+func (l *Listener) startLocked(req wire.HookRequest, key, id string, chain []proc.ID, claimed bool, now time.Time, drain bool) (string, int, []string) {
 	cands := probe(chain, req.Harness)
 	if req.Harness == wire.HarnessClaude && len(cands) > 1 {
 		cands = cands[:1]
@@ -242,7 +253,7 @@ func (l *Listener) startLocked(req wire.HookRequest, key, id string, chain []pro
 		// so a session that never uses kwak never joins the room.
 	}
 	l.changedLocked()
-	if !paired || len(s.Inbox.Items) == 0 {
+	if !drain || len(s.Inbox.Items) == 0 {
 		return "", 0, ensures
 	}
 	text, more := l.drainLocked(s, "", &s.Inbox, s.Agent, now)

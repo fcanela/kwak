@@ -82,6 +82,40 @@ func TestSessionStartedWhileListenerDown(t *testing.T) {
 	}
 }
 
+// A session resumed in a new process while the listener was down is taken over at its next hook,
+// when its old process is dead (decision 49). Messages that waited for it are delivered there.
+func TestSessionResumedWhileListenerDown(t *testing.T) {
+	e := newEnv(t)
+	e.connect()
+	h := e.claudeTree(100)
+	e.child(h, 110)
+	e.mcp(e.child(h, 120).PID, "claude", "")
+	e.start(110, "claude", sid1, "startup", cwd)
+	uid := e.waitAgent(k1)
+	e.deliver(event("$m", bob, e.clk.Now(), text("which port?", uid)))
+	e.procs.Kill(120)
+	e.procs.Kill(110)
+	e.procs.Kill(100)
+	h2 := e.claudeTree(300)
+	e.child(h2, 310)
+	c := e.mcp(e.child(h2, 320).PID, "claude", "")
+	e.clk.instant = true
+	if r := e.tool(c, "send", `{"text":"hello"}`); !r.IsError || r.Text != textNotSeen {
+		t.Fatalf("first send: %+v", r)
+	}
+	e.clk.instant = false
+	r := e.hook(310, hookReq("claude", wire.EventPostTool, sid1, cwd))
+	if !strings.Contains(r.Text, "which port?") {
+		t.Fatalf("the next hook did not deliver the waiting message: %+v", r)
+	}
+	if s := e.session(k1); s.HarnessProc == nil || *s.HarnessProc != h2 {
+		t.Fatalf("the session was not taken over: %+v", s)
+	}
+	if r := e.tool(c, "send", `{"text":"hello"}`); r.IsError {
+		t.Fatalf("second send: %+v", r)
+	}
+}
+
 // A session joins kwak at its first send, reply or helper call, not at its start (decision 48):
 // hooks, status, thread and a reload make no agent.
 func TestSessionGetsAgentAtFirstUse(t *testing.T) {

@@ -44,6 +44,9 @@ type state struct {
 	// every inbox (5.16). Rejected is the latest messages a check stopped, for kwak status.
 	Checking map[string]*pendingCheck `json:"checking,omitempty"`
 	Rejected []wire.Rejection         `json:"rejected,omitempty"`
+	// RespThreads is the threads responder runs answer: the open question's event id -> its
+	// session record and its asker (decision 46).
+	RespThreads map[string]respThread `json:"responder_threads,omitempty"`
 }
 
 // turns counts the background runs started for one thread since a person last wrote in it.
@@ -76,6 +79,7 @@ type session struct {
 	HandedOver  []handover         `json:"handed_over,omitempty"`
 	CloseDue    *time.Time         `json:"close_due,omitempty"`
 	ResumeDue   *time.Time         `json:"resume_due,omitempty"`
+	Responder   bool               `json:"responder,omitempty"` // a responder run's record (decision 46)
 }
 
 type helper struct {
@@ -145,6 +149,9 @@ func (s *state) init() {
 	}
 	if s.Checking == nil {
 		s.Checking = map[string]*pendingCheck{}
+	}
+	if s.RespThreads == nil {
+		s.RespThreads = map[string]respThread{}
 	}
 	for _, se := range s.Sessions {
 		if se.Helpers == nil {

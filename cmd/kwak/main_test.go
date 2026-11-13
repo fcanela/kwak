@@ -285,6 +285,24 @@ func TestDoctorWithoutListener(t *testing.T) {
 	}
 }
 
+// kwak doctor asks the user service whether it is installed, to warn about a responder that no
+// running listener would start (decision 46). The rig's service writes and runs nothing real.
+func TestDoctorResponderWithoutService(t *testing.T) {
+	r := newRig(t)
+	cfg := filepath.Join(os.Getenv(paths.EnvConfigDir), "config.json")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte(`{"version":1,"server":"https://kwak.test","server_name":"kwak.test","owner":"fcanela",`+
+		`"machine":"laptop","pairing_id":"3f9a1c2e","responder":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := r.run("", "doctor")
+	if !strings.Contains(out, "warn  responder: the listener is not installed as a service") {
+		t.Fatalf("doctor output:\n%s", out)
+	}
+}
+
 func TestInstallAndUninstall(t *testing.T) {
 	r := newRig(t)
 	code, out, errs := r.run("", "install")

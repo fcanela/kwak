@@ -140,7 +140,8 @@ func commands(s sys) map[string]Main {
 		"uninstall": svc(func(c service.Commands) cli.Main { return c.Uninstall }),
 		"listen":    s.listen,
 		"doctor": func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-			d := setup.DoctorDeps{Preflight: s.Preflight, Secrets: s.Keyring(), Call: socketCaller(), Dev: s.Dev}
+			d := setup.DoctorDeps{Preflight: s.Preflight, Secrets: s.Keyring(), Call: socketCaller(), Dev: s.Dev,
+				Service: s.service().Status}
 			return setup.Doctor(d)(args, stdin, stdout, stderr)
 		},
 		"hook": func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {

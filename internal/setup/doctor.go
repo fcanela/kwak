@@ -36,6 +36,9 @@ type DoctorDeps struct {
 	ConfigDir  func() (string, error)
 	SocketPath func() (string, error)
 	Dev        bool // a dev build (paths.Dev): doctor says so and names its folder
+	// Service is the state of the listener's user service, "not installed" when there is none
+	// (service.Manager.Status). nil: not checked.
+	Service func() (string, error)
 }
 
 // Doctor-only texts.
@@ -124,6 +127,7 @@ func (d *DoctorDeps) run(r *report) {
 	keyName := d.checkConfig(r)
 	d.checkKeyring(r, busOK, keyName)
 	d.checkListener(r)
+	d.checkResponder(r)
 	d.checkPath(r)
 	d.checkClaude(r)
 	d.checkCodex(r)
@@ -232,6 +236,43 @@ func (d *DoctorDeps) checkListener(r *report) {
 	}
 	if st.CallerChecks == "claimed" {
 		r.line("warn", "listener", "caller checks: claimed (the listener cannot read the caller's process on this OS)")
+	}
+}
+
+// checkResponder shows the responder of this machine (decision 46) when it is on, and warns when
+// no installed service keeps a listener running to start its runs.
+func (d *DoctorDeps) checkResponder(r *report) {
+	dir, err := d.ConfigDir()
+	if err != nil {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	var c wire.MachineConfig
+	if err != nil || json.Unmarshal(b, &c) != nil || !c.Responder {
+		return
+	}
+	folder := c.ResponderDir
+	if folder == "" {
+		folder = filepath.Join(dir, "responder")
+	}
+	r.line("ok", "responder", "on, in %s", folder)
+	if _, err := d.Stat(filepath.Join(folder, "AGENTS.md")); err != nil {
+		r.line("warn", "responder", "%s has no AGENTS.md; run kwak config responder on to write the default one", folder)
+	}
+	if (len(c.ResponderCommand) == 0) != (len(c.ResponderContinue) == 0) {
+		r.line("warn", "responder", "set both responder_command and responder_continue, or neither; no responder run starts")
+	}
+	if len(c.ResponderCommand) == 0 && c.ResumeExe[wire.HarnessClaude] == "" {
+		r.line("warn", "responder", "no path of claude for its runs; run kwak config resume-exe in your own terminal")
+	}
+	switch {
+	case d.Dev:
+		r.line("skip", "responder", "a dev build has no service: its runs start only while kwak listen runs in a terminal")
+	case d.Service == nil:
+	default:
+		if st, err := d.Service(); err == nil && st == "not installed" {
+			r.line("warn", "responder", "the listener is not installed as a service, so no run starts while no kwak listen runs; run kwak install")
+		}
 	}
 }
 

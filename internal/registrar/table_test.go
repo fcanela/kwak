@@ -234,9 +234,13 @@ var tableSetup = map[string]func(f *fixture) string{
 		f.seedKind(wt.OldPairingID, wt.Owner, wt.OldOwnerKey, true, true)
 		return ""
 	},
-	"report: no report room": seedOnly,
-	"report: unknown field":  seedSide,
-	"report: bad key":        seedSide,
+	"report: no report room":   seedOnly,
+	"report: unknown field":    seedSide,
+	"report: bad key":          seedSide,
+	"responder: token":         seedOnly,
+	"responder: unknown field": seedOnly,
+	"responder: bad key":       seedOnly,
+	"responder: owner removed": seedRemoved,
 }
 
 func seedSide(f *fixture) string { f.seed(); f.sideRooms(false); return "" }

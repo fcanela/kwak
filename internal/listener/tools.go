@@ -82,6 +82,9 @@ func (l *Listener) tool(c *client, req wire.ToolRequest) result {
 	if s == nil {
 		return fail(textNotSeen)
 	}
+	if s.Responder && req.Name != wire.ToolReply && req.Name != wire.ToolThread && req.Name != wire.ToolStatus {
+		return fail("a responder run answers with reply and reads with thread; " + req.Name + " is not for it")
+	}
 	ctx, cancel := context.WithTimeout(l.bg, toolBudget)
 	defer cancel()
 	args := req.Args
@@ -473,7 +476,7 @@ func (l *Listener) toolSend(ctx context.Context, s *session, req wire.ToolReques
 }
 
 // textOpenNoAgent ends a send whose 'to' named only persons: it mentions nobody.
-const textOpenNoAgent = "No agent is mentioned, so it is an open question for volunteering agents.\n"
+const textOpenNoAgent = "No agent is mentioned, so it is an open question for volunteering agents and responders.\n"
 
 func (l *Listener) questionTimeoutLocked() time.Duration {
 	if l.st.Settings != nil {

@@ -76,6 +76,7 @@ func (s *Server) API() http.Handler {
 	mux.HandleFunc("POST "+p+wire.PathUnpair, s.authed(s.handleUnpair, true))
 	mux.HandleFunc("GET "+p+wire.PathMe, s.authed(s.handleMe, true))
 	mux.HandleFunc("POST "+p+wire.PathReportJoin, s.authed(s.handleReportJoin, true))
+	mux.HandleFunc("POST "+p+wire.PathResponder, s.authed(s.handleResponder, true))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 404, "M_UNRECOGNIZED", "unknown route")
 	})
@@ -224,15 +225,16 @@ func (s *Server) replaced(ctx context.Context, c caller, old string) {
 
 // confirmReplace moves every agent record of the pairing p replaces to p and revokes the old one,
 // inside the caller's Update (spec 3.2). The old pairing's listener account moves too when p
-// took its name (decision 42); a listener account of another name stays and replaced closes it.
-// It returns the replaced pairing id, or "".
+// took its name (decision 42), and so does its responder account (decision 46); an account of
+// another name stays and replaced closes it. It returns the replaced pairing id, or "".
 func (s *Server) confirmReplace(st *State, id string, p *Pairing, now time.Time) string {
 	r := st.Pairings[p.Replaces]
 	if p.Replaces == "" || r == nil || r.Revoked != nil || r.Owner != p.Owner || r.Test != p.Test {
 		return ""
 	}
 	for lp, a := range st.Agents {
-		if a.Pairing == p.Replaces && (a.Kind != wire.KindStanding || lp == p.Listener) {
+		named := a.Kind == wire.KindStanding || a.Kind == wire.KindResponder
+		if a.Pairing == p.Replaces && (!named || lp == p.Listener || lp == wire.ResponderOf(p.Listener)) {
 			a.Pairing = id
 		}
 	}
@@ -350,7 +352,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, c caller) {
 			me.Settings = wire.Settings{QuestionTimeout: o.Settings.QuestionTimeout}
 		}
 		for _, a := range st.Agents {
-			if a.Pairing == c.pairing && a.Kind != wire.KindStanding && a.Open() {
+			if a.Pairing == c.pairing && a.Kind != wire.KindStanding && a.Kind != wire.KindResponder && a.Open() {
 				me.AgentsOpen++
 			}
 		}

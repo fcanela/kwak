@@ -218,6 +218,10 @@ func arrange(t *testing.T, e *env, c wiretest.IPCCase) wire.Harness {
 		e.l.mu.Unlock()
 		e.setChecks("", "/opt/kwak/check-in")
 		e.setResume(wire.ResumeReplies, wire.ResumeMentions)
+		e.editConf(func(c *MachineConfig) { c.Responder, c.ResponderDir = true, "/home/u/kwak-responder" })
+		e.l.mu.Lock()
+		e.l.respUser = wiretest.ResponderUser
+		e.l.mu.Unlock()
 	case "status, waiting for the keyring":
 		e.l.st.Settings = nil
 		e.setPhase(wire.StateWaitingKeyring, textKeyring)

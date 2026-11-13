@@ -26,15 +26,20 @@ type pendingCheck struct {
 }
 
 // liveConf is what the listener reads from config.json at each use, not only at start, so kwak
-// config takes effect without a restart (5.2): the check commands (5.16) and the background resume
-// triggers (5.11).
+// config takes effect without a restart (5.2): the check commands (5.16), the background resume
+// triggers (5.11) and the responder (5.18).
 type liveConf struct {
 	Outgoing, Incoming string
 	Resume             []string // wire.MachineConfig.ResumeTriggers: nil is off
+	// The responder (decision 46): on or off, and whether it answers the owner's own agents.
+	// Conf is the whole file as read, for a run's command, folder and limit.
+	Responder, OwnAgents bool
+	Conf                 *MachineConfig
 }
 
 func liveOf(c *MachineConfig) liveConf {
-	return liveConf{Outgoing: c.CheckOutgoing, Incoming: c.CheckIncoming, Resume: c.ResumeTriggers()}
+	return liveConf{Outgoing: c.CheckOutgoing, Incoming: c.CheckIncoming, Resume: c.ResumeTriggers(),
+		Responder: c.Responder, OwnAgents: c.ResponderOwnAgents, Conf: c}
 }
 
 // readLive reads config.json now. When the file cannot be read, the values read last are used,

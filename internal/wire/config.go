@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/fcanela/kwak/internal/secrets"
 )
@@ -49,6 +50,37 @@ type MachineConfig struct {
 	// Test is set for a test pairing (decision 40): its room is the test room and its standing
 	// account the test one. kwak pair copies it from the claim. Added 2026-11-12.
 	Test bool `json:"test,omitempty"`
+	// Responder turns this machine's responder on (decision 46, spec 5.18). Only kwak config
+	// responder writes it; kwak pair keeps it. The other responder keys are written by hand.
+	Responder bool `json:"responder,omitempty"`
+	// ResponderDir is the folder responder runs start in. Empty is "responder" in the config folder.
+	ResponderDir string `json:"responder_dir,omitempty"`
+	// ResponderPrompt replaces kwak's responder prompt when set.
+	ResponderPrompt string `json:"responder_prompt,omitempty"`
+	// ResponderCommand is the argv of a run for a new question, and ResponderContinue the argv of
+	// a run for a follow-up in its thread. Both empty is kwak's command for Claude Code; only one
+	// set starts no run. Placeholders: {claude} (resume_exe's claude, read at start), {prompt},
+	// {session} (required) and {dir}.
+	ResponderCommand  []string `json:"responder_command,omitempty"`
+	ResponderContinue []string `json:"responder_continue,omitempty"`
+	// ResponderOwnAgents lets the responder answer open questions of the owner's own agents, from
+	// any machine. Off by default.
+	ResponderOwnAgents bool `json:"responder_own_agents,omitempty"`
+	// ResumeTimeout and ResponderTimeout limit one background run and one responder run: Go
+	// durations such as "15m". Missing, bad or not positive is DefaultRunTimeout.
+	ResumeTimeout    string `json:"resume_timeout,omitempty"`
+	ResponderTimeout string `json:"responder_timeout,omitempty"`
+}
+
+// DefaultRunTimeout limits one background or responder run (decision 46: "Lets set both to 15").
+const DefaultRunTimeout = 15 * time.Minute
+
+// RunTimeout reads a run limit of config.json: a positive Go duration, else DefaultRunTimeout.
+func RunTimeout(s string) time.Duration {
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d
+	}
+	return DefaultRunTimeout
 }
 
 // Background resume triggers in config.json (decision 44, spec 5.11).

@@ -31,6 +31,7 @@ const (
 	StandingUser   = "@agent.fcanela.brave-heron.listener:" + ServerName     // the pairing's listener account (decision 42)
 	TestStanding   = "@agent.fcanela.calm-otter-test.listener:" + ServerName // a test pairing's listener account
 	LegacyStanding = "@agent.fcanela.listener:" + ServerName                 // the per-owner account of builds before decision 42
+	ResponderUser  = "@agent.fcanela.brave-heron.responder:" + ServerName    // the pairing's responder account (decision 46)
 	ReportRoomID   = "!r3P0rtR00m"
 	ClaudeAgent    = "@agent.fcanela.4f2a9c1e7b034d5a:" + ServerName // Candidates(...)[0]
 	CodexAgent     = "@agent.fcanela.8261713321e78fea:" + ServerName // Candidates(...)[0]
@@ -417,6 +418,30 @@ var HTTP = []Exchange{
 		Auth: bearer(BadKey), Request: `{"user_id":"` + StandingUser + `"}`,
 		Status: 401, Errcode: wire.ErrBadKey, Response: apiErr(wire.ErrBadKey, "unknown, expired or revoked key"),
 	},
+
+	// POST /responder (decision 46)
+	{
+		Name: "responder: token", Method: "POST", Path: wire.APIPrefix + wire.PathResponder,
+		Auth: bearer(OwnerKey), Request: `{}`,
+		Status: 200,
+		Response: `{"user_id":"` + ResponderUser + `","access_token":"` + AgentToken + `","device_id":"KWAK",` +
+			`"room_id":"!a1B2c3D4","new":true,"reopened":false}`,
+	},
+	{
+		Name: "responder: unknown field", Method: "POST", Path: wire.APIPrefix + wire.PathResponder,
+		Auth: bearer(OwnerKey), Request: `{"x":1}`, BadBody: true,
+		Status: 400, Errcode: wire.ErrBadRequest, Response: apiErr(wire.ErrBadRequest, `json: unknown field "x"`),
+	},
+	{
+		Name: "responder: bad key", Method: "POST", Path: wire.APIPrefix + wire.PathResponder,
+		Auth: bearer(BadKey), Request: `{}`,
+		Status: 401, Errcode: wire.ErrBadKey, Response: apiErr(wire.ErrBadKey, "unknown, expired or revoked key"),
+	},
+	{
+		Name: "responder: owner removed", Method: "POST", Path: wire.APIPrefix + wire.PathResponder,
+		Auth: bearer(OwnerKey), Request: `{}`,
+		Status: 403, Errcode: wire.ErrOwnerRemoved, Response: apiErr(wire.ErrOwnerRemoved, "owner removed"),
+	},
 }
 
 // NewRequest returns a pointer to the type the request body decodes into, or nil for no body.
@@ -435,7 +460,7 @@ func (e Exchange) NewRequest() any {
 		return new(wire.AliveRequest)
 	case wire.PathReportJoin:
 		return new(wire.ReportJoinRequest)
-	case wire.PathPairClaim, wire.PathStanding, wire.PathUnpair:
+	case wire.PathPairClaim, wire.PathStanding, wire.PathUnpair, wire.PathResponder:
 		return new(wire.Empty)
 	}
 	return nil
@@ -456,7 +481,7 @@ func (e Exchange) NewResponse() any {
 		return new(wire.ClaimResponse)
 	case wire.PathStanding:
 		return new(wire.Standing)
-	case wire.PathAgents:
+	case wire.PathAgents, wire.PathResponder:
 		return new(wire.Agent)
 	case wire.PathAgentsClose:
 		return new(wire.CloseResponse)

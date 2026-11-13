@@ -11,14 +11,15 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fcanela/kwak/internal/listener"
 	"github.com/fcanela/kwak/internal/wire"
 )
 
 const configUsage = "usage: kwak config resume [off|<triggers>] | resume-exe [--harness claude|codex] [path] | " +
-	"resume-per-hour <n> | check-outgoing <path|off> | check-incoming <path|off>"
+	"resume-per-hour <n> | check-outgoing <path|off> | check-incoming <path|off> | responder [on|off]"
 
 // Config is kwak config resume [off|<triggers>] | resume-exe [--harness claude|codex] [path] |
-// resume-per-hour <n> | check-outgoing <path|off> | check-incoming <path|off>.
+// resume-per-hour <n> | check-outgoing <path|off> | check-incoming <path|off> | responder [on|off].
 func (c *CLI) Config(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, configUsage)
@@ -33,6 +34,8 @@ func (c *CLI) Config(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 		return c.configResumePerHour(args[1:], stdout, stderr)
 	case "check-outgoing", "check-incoming":
 		return c.configCheck(args[0], args[1:], stdout, stderr)
+	case "responder":
+		return c.configResponder(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "kwak config: unknown setting %q\n", args[0])
 	return 2
@@ -44,10 +47,10 @@ const resumeHelp = "replies: resume an ended session when someone replies in a t
 	"mentions: resume it when someone mentions its agent outside that thread.\n" +
 	"all: replies and mentions. off: never (the default).\n"
 
-// errResumeOpen is the answer to the open trigger of decision 31 (an open question), which needs
-// the responder (spec 5.11).
-var errResumeOpen = errors.New("open (a run for an open question) is not available yet: it needs the responder, " +
-	"which is not built. Use replies, mentions or all")
+// errResumeOpen is the answer to the open trigger of decision 31 (an open question): the responder
+// answers those, not a resumed session (decision 46, spec 5.11).
+var errResumeOpen = errors.New("open questions are answered by the responder, not by a resumed session: " +
+	"run kwak config responder on. Use replies, mentions or all here")
 
 // parseResume reads the triggers of kwak config resume: off, or a comma list of replies, mentions
 // and all. all is stored as replies and mentions, so the file says what fires. nil is off.
@@ -257,6 +260,57 @@ func (c *CLI) configCheck(which string, args []string, stdout, stderr io.Writer)
 	fmt.Fprintf(stdout, "Recorded %s as the %s check command. %s\n", p, what, reader)
 	return 0
 }
+
+const responderUsage = "usage: kwak config responder [on|off]"
+
+// configResponder shows or sets this machine's responder (decision 46, spec 5.18). on also makes
+// the responder folder with a default AGENTS.md when it has none.
+func (c *CLI) configResponder(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 1 || len(args) == 1 && args[0] != "on" && args[0] != "off" {
+		fmt.Fprintln(stderr, responderUsage)
+		return 2
+	}
+	dir, err := c.env.ConfigDir()
+	if err != nil {
+		return fail(stderr, "%v", err)
+	}
+	cfg, err := loadConfig(dir, c.env.InsecureHTTPForTests)
+	if err != nil {
+		return fail(stderr, "%v", err)
+	}
+	folder := listener.ResponderDir(&cfg.MachineConfig, filepath.Join(dir, ConfigFile))
+	if len(args) == 0 {
+		state := "off"
+		if cfg.Responder {
+			state = "on"
+		}
+		fmt.Fprintf(stdout, "Responder on this machine: %s. Its folder: %s.\n\n%s\n%s\n", state, folder, responderHelp, responderUsage)
+		return 0
+	}
+	cfg.Responder = args[0] == "on"
+	if cfg.Responder {
+		if err := listener.EnsureResponderDir(folder); err != nil {
+			return fail(stderr, "could not make the responder folder: %v", err)
+		}
+	}
+	if err := cfg.Save(dir); err != nil {
+		return fail(stderr, "could not write %s: %v", ConfigFile, err)
+	}
+	if !cfg.Responder {
+		fmt.Fprintln(stdout, "The responder on this machine is now off. A run already going ends as usual; no new question starts one.")
+		return 0
+	}
+	fmt.Fprintf(stdout, "The responder on this machine is now on. The listener reads it before each batch of messages, "+
+		"so no restart is needed.\nIts folder is %s. Edit AGENTS.md there: where to look for answers, and what it may share.\n"+
+		"Each open question from another person's agent starts one unattended, billed run that can read your files.\n", folder)
+	if len(cfg.ResponderCommand) == 0 && cfg.ResumeExe[wire.HarnessClaude] == "" {
+		fmt.Fprintln(stdout, "A run needs the path of claude: run kwak config resume-exe in your own terminal, then kwak install.")
+	}
+	return 0
+}
+
+const responderHelp = "on: answer open questions from other people's agents, one run per question, in the responder folder.\n" +
+	"off: never (the default). The command, prompt, folder and limits are keys in config.json (see the docs)."
 
 // runnable reports whether fi at path p can be started: an exec bit, or on Windows (no exec bit)
 // an extension Windows runs.

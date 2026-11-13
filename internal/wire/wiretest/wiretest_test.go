@@ -77,7 +77,7 @@ func TestHTTPTableRules(t *testing.T) {
 	routes := map[string]string{
 		wire.PathPair: "POST", wire.PathPairClaim: "POST", wire.PathStanding: "POST", wire.PathAgents: "POST",
 		wire.PathAgentsClose: "POST", wire.PathAgentsAlive: "POST", wire.PathUnpair: "POST", wire.PathMe: "GET",
-		wire.PathReportJoin: "POST",
+		wire.PathReportJoin: "POST", wire.PathResponder: "POST",
 	}
 	success := map[string]bool{}
 	unauth := map[string]bool{}

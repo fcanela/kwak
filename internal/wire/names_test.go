@@ -174,6 +174,39 @@ func TestListenerLocalpart(t *testing.T) {
 	}
 }
 
+// A responder account name (decision 46) is its pairing's listener name with "responder" in place
+// of "listener": it parses back to the same owner and word pair, with Kind responder, and it can
+// be no helper's parent. ResponderOf finds it from the listener name, and an old per-owner
+// listener name, which has no word pair, has none.
+func TestResponderLocalpart(t *testing.T) {
+	for _, test := range []bool{false, true} {
+		lp := ResponderLocalpart("fcanela", "brave-heron", test)
+		want := map[bool]string{false: "agent.fcanela.brave-heron.responder", true: "agent.fcanela.brave-heron-test.responder"}[test]
+		if lp != want {
+			t.Fatalf("ResponderLocalpart(test %v) = %q", test, lp)
+		}
+		n, err := ParseLocalpart(lp)
+		if err != nil || n != (Name{Kind: KindResponder, Owner: "fcanela", Pair: "brave-heron", Test: test}) {
+			t.Fatalf("ParseLocalpart(%q) = %+v, %v", lp, n, err)
+		}
+		if _, err := HelperLocalpart(lp, "tests"); !errors.Is(err, ErrBadLocalpart) {
+			t.Fatalf("HelperLocalpart under %q: %v", lp, err)
+		}
+		if got := ResponderOf(ListenerLocalpart("fcanela", "brave-heron", test)); got != lp {
+			t.Fatalf("ResponderOf: %q", got)
+		}
+	}
+	for _, lp := range []string{"agent.fcanela.listener", "agent.fcanela.listener-test", "agent.fcanela.4f2a9c1e7b034d5a",
+		"agent.fcanela.brave-heron.responder", "agent.fcanela.brave-heron.responders"} {
+		if got := ResponderOf(lp); got != "" {
+			t.Fatalf("ResponderOf(%q) = %q", lp, got)
+		}
+	}
+	if _, err := ParseLocalpart("agent.fcanela.brave-heron.responders"); err == nil {
+		t.Fatal("a responder name with a wrong last part parsed")
+	}
+}
+
 // The per-owner standing accounts of the builds before decision 42 still parse, with no Pair, so
 // the registrar can close their records.
 func TestOldStandingAccountsParse(t *testing.T) {
@@ -192,6 +225,9 @@ func TestOldStandingAccountsParse(t *testing.T) {
 // "listener" is no longer a helper name a new helper may take (decision 42), but a helper of that
 // name made before still parses as a helper: its middle part is hex.
 func TestValidHelperReservesListener(t *testing.T) {
+	if ValidHelper("responder") || !ValidHelper("responders") {
+		t.Fatal("responder is reserved since decision 46")
+	}
 	if ValidHelper("listener") || !ValidHelper("listeners") || !ValidHelper("tests") || ValidHelper("Tests") {
 		t.Fatal("ValidHelper")
 	}

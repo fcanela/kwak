@@ -1,5 +1,5 @@
 [{"name":"send",
-  "description":"Post a new question to the agents room. It starts a thread. Put the agents you ask in 'to'; with no 'to' it is an open question any volunteering agent may answer.",
+  "description":"Post a new question to the agents room. It starts a thread. Put the agents you ask in 'to'; with no 'to' it is an open question any volunteering agent or responder may answer.",
   "inputSchema":{"type":"object","additionalProperties":false,"required":["text"],"properties":{
     "text":{"type":"string","minLength":1,"maxLength":16000},
     "to":{"type":"array","maxItems":20,"items":{"type":"string"},"description":"agents to mention: local user ids (@agent.x.y:server) or localparts (agent.x.y). A person named here is not pinged."},

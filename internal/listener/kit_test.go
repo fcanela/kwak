@@ -107,6 +107,9 @@ type fakeReg struct {
 	me        wire.Me
 	user      map[string]string // token -> the agent it was minted for
 
+	responders int   // Responder calls
+	respErr    error // an error for Responder
+
 	reportRoom  string                    // the report room ReportJoin answers; "" answers KWAK_NO_REPORT_ROOM
 	reportErr   func(userID string) error // an error for ReportJoin, before the room
 	reportJoins []string                  // the accounts ReportJoin was asked to join
@@ -255,6 +258,29 @@ func (f *fakeReg) ReportJoin(_ context.Context, userID string) (string, error) {
 		return "", &wire.APIError{Status: 404, Errcode: wire.ErrNoReportRoom, Message: "no report room"}
 	}
 	return f.reportRoom, nil
+}
+
+// Responder answers the pairing's responder account (decision 46) with a new token each call.
+func (f *fakeReg) Responder(context.Context) (wire.Agent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.responders++
+	if err := f.authLocked(); err != nil {
+		return wire.Agent{}, err
+	}
+	if f.respErr != nil {
+		return wire.Agent{}, f.respErr
+	}
+	f.agentN++
+	tok := fmt.Sprintf("tok-responder-%04d", f.agentN)
+	f.user[tok] = wiretest.ResponderUser
+	return wire.Agent{UserID: wiretest.ResponderUser, AccessToken: tok, DeviceID: "KWAK", RoomID: wiretest.RoomID}, nil
+}
+
+func (f *fakeReg) responderCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.responders
 }
 
 func (f *fakeReg) joins() []string {

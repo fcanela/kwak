@@ -133,6 +133,8 @@ func run(t *testing.T, c *Client, row wiretest.Exchange) ([]byte, error) {
 		out = wire.Empty{}
 	case wire.PathMe:
 		out, err = c.Me(ctx)
+	case wire.PathResponder:
+		out, err = c.Responder(ctx)
 	case wire.PathReportJoin:
 		var room string
 		room, err = c.ReportJoin(ctx, req.(*wire.ReportJoinRequest).UserID)

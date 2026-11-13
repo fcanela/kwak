@@ -330,6 +330,10 @@ func (l *Listener) routeEvents(ctx context.Context, m Matrix, evs []matrix.Event
 	live := l.readLive()
 	l.mu.Lock()
 	l.checkIn = live.Incoming
+	l.idx.Responder, l.idx.OwnAgents, l.idx.ResponderUser = live.Responder, live.OwnAgents, l.respUser
+	if c := l.conf.Load(); c != nil {
+		l.idx.Owner = c.Owner
+	}
 	l.mu.Unlock()
 	for _, ev := range evs {
 		l.mu.Lock()
@@ -386,6 +390,7 @@ func (l *Listener) applyLocked(ev matrix.Event, ds []Delivery) {
 	if len(ds) == 0 {
 		return
 	}
+	l.responderLocked(ev, ds)
 	msg := render.Item{EventID: ev.EventID, Sender: ev.Sender, ThreadRoot: root, SentAt: time.UnixMilli(ev.TS).UTC(), Body: c.body}
 	if kind := scanText(c.body); kind != "" {
 		l.holdLocked(msg, ds, "secrets", check.SecretReason(kind))
@@ -403,7 +408,7 @@ func (l *Listener) applyLocked(ev matrix.Event, ds []Delivery) {
 func (l *Listener) targetLocked(s *session, d Delivery, msg render.Item) (*queue, string, render.Item) {
 	it := msg
 	it.Reason = d.Reason
-	it.OwnThread = msg.ThreadRoot != "" && l.st.Roots[msg.ThreadRoot] == d.UserID
+	it.OwnThread = msg.ThreadRoot != "" && d.UserID != "" && l.st.Roots[msg.ThreadRoot] == d.UserID
 	if d.Helper != "" {
 		h := s.Helpers[d.Helper]
 		switch {

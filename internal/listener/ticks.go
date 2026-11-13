@@ -142,6 +142,11 @@ func (l *Listener) pruneLocked(key string, s *session) {
 			delete(l.st.Roots, root)
 		}
 	}
+	for root, t := range l.st.RespThreads {
+		if t.Session == key {
+			delete(l.st.RespThreads, root)
+		}
+	}
 	for _, qs := range []map[string]*question{l.st.Questions, l.st.OpenQs} {
 		for root, q := range qs {
 			if q.Session == key {
@@ -212,15 +217,20 @@ func resumeArgv(exe, sessionID string, strict bool) []string {
 // this session rooted (ownThread, whatever Route ranked it) or YourThread; mentions is a mention
 // anywhere else. The triggers are the ones read last from config.json (readLive): before each
 // routed batch, when an incoming check ends, and by kwak status. Codex sessions are skipped (DV-14).
+// A responder record runs for every message it gets while the responder is on (5.18).
 func (l *Listener) resumeTriggerLocked(s *session, r render.Reason, ownThread bool) {
 	if s.Ended == nil || s.Tools || s.Harness != wire.HarnessClaude || s.ResumeDue != nil {
 		return
 	}
 	l.checkMu.Lock()
-	on := l.live.Resume
+	on, responder := l.live.Resume, l.live.Responder
 	l.checkMu.Unlock()
 	reply := ownThread || r == render.YourThread
 	switch {
+	case s.Responder:
+		if !responder {
+			return
+		}
 	case reply && slices.Contains(on, wire.ResumeReplies):
 	case !reply && r == render.Mention && slices.Contains(on, wire.ResumeMentions):
 	default:
@@ -277,7 +287,10 @@ func waitingLocked(s *session) (items []fedItem, threads []string) {
 	return items, threads
 }
 
+// startResume starts the background run of a session, or the run of a responder record (5.18),
+// which differs only in its command, folder and time limit.
 func (l *Listener) startResume(key string) {
+	live := l.readLive()
 	l.mu.Lock()
 	s := l.st.Sessions[key]
 	if s == nil || s.ResumeDue == nil {
@@ -286,11 +299,11 @@ func (l *Listener) startResume(key string) {
 	}
 	s.ResumeDue = nil
 	l.dirty = true
-	exe := ""
 	max := wire.DefaultResumeMax
 	if c := l.conf.Load(); c != nil {
-		exe, max = c.ResumeExe[wire.HarnessClaude], c.ResumeMax
+		max = c.ResumeMax
 	}
+	argv, limit, why := l.runPlan(s, live.Conf)
 	hex, err := wire.SessionHex(s.SessionID)
 	waiting, threads := waitingLocked(s)
 	retry := func() {
@@ -302,9 +315,17 @@ func (l *Listener) startResume(key string) {
 	case s.Ended == nil || s.Tools || s.Harness != wire.HarnessClaude || s.waiting() == 0 || err != nil:
 		l.mu.Unlock()
 		return
-	case l.d.Runner == nil || exe == "" || !filepath.IsAbs(exe) || s.Cwd == "":
+	case s.Responder && !live.Responder:
+		// Turned off: its messages wait; nothing runs until it is on again and more come.
 		l.mu.Unlock()
-		l.log.Info("background resume skipped: no resume-exe or cwd", "session", key)
+		return
+	case l.d.Runner == nil || why != "" || s.Cwd == "":
+		l.mu.Unlock()
+		l.log.Info("background resume skipped", "session", key, "why", why)
+		return
+	case s.Responder && !l.responderReadyLocked(s):
+		// A run starts only once it can post; the account is asked for meanwhile.
+		retry()
 		return
 	case l.running[key] != nil || l.opening[key]:
 		// The session's run is still going, or its owner is opening it ("you win").
@@ -338,15 +359,15 @@ func (l *Listener) startResume(key string) {
 			l.log.Info("background resume paused: loop ceiling", "session", key, "thread", t, "turns", l.turnsLocked(t))
 		}
 	}
-	// The 15 minute limit runs on the listener's clock, like its other timers.
+	// The time limit (15 minutes by default) runs on the listener's clock, like its other timers.
 	ctx, cancel := context.WithCancel(l.bg)
-	limit := l.d.Clock.After(resumeKill)
+	timeout := l.d.Clock.After(limit)
 	r := &resumeRun{cancel: cancel, done: make(chan struct{}), fed: fed, held: held, counted: counted,
 		handled: map[string]bool{}}
 	l.running[key] = r
 	l.st.ResumeRuns++
 	l.hourRuns, l.hourFull = append(l.hourRuns, now), false
-	cwd, sid := s.Cwd, s.SessionID
+	cwd, responder := s.Cwd, s.Responder
 	l.mu.Unlock()
 	done := func() {
 		cancel()
@@ -360,12 +381,19 @@ func (l *Listener) startResume(key string) {
 		done()
 		return
 	}
+	if s.Responder {
+		if err := EnsureResponderDir(cwd); err != nil {
+			done()
+			l.log.Warn("responder run not started: its folder", "session", key, "err", err)
+			return
+		}
+	}
 	logf, err := os.OpenFile(filepath.Join(dir, hex+".log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		done()
 		return
 	}
-	wait, err := l.d.Runner.Start(ctx, cwd, resumeArgv(exe, sid, resumeStrictMCP), logf)
+	wait, err := l.d.Runner.Start(ctx, cwd, argv, logf)
 	if err != nil {
 		logf.Close()
 		done()
@@ -384,10 +412,10 @@ func (l *Listener) startResume(key string) {
 	}
 	l.dirty = true
 	l.mu.Unlock()
-	l.log.Info("background resume started", "session", key, "threads", len(counted))
+	l.log.Info("background resume started", "session", key, "threads", len(counted), "responder", responder)
 	l.spawn(func() {
 		select {
-		case <-limit:
+		case <-timeout:
 			cancel()
 		case <-ctx.Done():
 		}
@@ -395,16 +423,52 @@ func (l *Listener) startResume(key string) {
 	// Run waits for this on shutdown, so a stopped run's group gets its SIGKILL (5.11).
 	l.spawn(func() {
 		err := wait()
-		// Clean: exit 0, and not stopped by the 15 minute limit, "you win" or the listener.
+		// Clean: exit 0, and not stopped by the time limit, "you win" or the listener.
 		clean := err == nil && ctx.Err() == nil
 		logf.Close()
 		l.mu.Lock()
 		rs := l.runEndLocked(key, r, clean)
+		seen := r.seen
 		l.mu.Unlock()
 		l.react(rs)
 		done()
 		l.log.Info("background resume ended", "session", key, "clean", clean, "err", err)
+		if !seen {
+			// Its SessionStart never reached kwak, so it was shown nothing.
+			l.log.Warn("background resume ended without its session start: are kwak's hooks loaded in that run?", "session", key)
+		}
 	})
+}
+
+// runPlan is the argv and the time limit of the next run of s, or why it cannot run. c is
+// config.json as read now; resume_exe is read at start and at reload, as before decision 46.
+func (l *Listener) runPlan(s *session, c *MachineConfig) (argv []string, limit time.Duration, why string) {
+	exe := ""
+	if at := l.conf.Load(); at != nil {
+		exe = at.ResumeExe[wire.HarnessClaude]
+	}
+	if c == nil {
+		c = l.conf.Load()
+	}
+	if s.Responder {
+		argv, err := responderArgv(c, exe, s)
+		if err != nil {
+			return nil, 0, err.Error()
+		}
+		t := ""
+		if c != nil {
+			t = c.ResponderTimeout
+		}
+		return argv, wire.RunTimeout(t), ""
+	}
+	if exe == "" || !filepath.IsAbs(exe) {
+		return nil, 0, "no resume-exe"
+	}
+	t := ""
+	if c != nil {
+		t = c.ResumeTimeout
+	}
+	return resumeArgv(exe, s.SessionID, resumeStrictMCP), wire.RunTimeout(t), ""
 }
 
 // resumePerHour is the most background runs this machine starts in any 60 minutes (decision 38).

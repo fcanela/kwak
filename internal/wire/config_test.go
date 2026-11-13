@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestMachineConfigJSON(t *testing.T) {
@@ -81,5 +82,36 @@ func TestMachineConfigKeyringAndTest(t *testing.T) {
 		`"pairing_id":"3f9a1c2e","keyring_user":"kwak.test/3f9a1c2e/owner-key","test":true}`), false)
 	if err != nil || !c.Test || c.KeyName() != "kwak.test/3f9a1c2e/owner-key" {
 		t.Fatalf("new config: %+v %q %v", c, c.KeyName(), err)
+	}
+}
+
+// The responder keys and the run limits are additive (decision 46): a config.json without them
+// keeps its shape on a save, and a missing, bad or not positive limit is 15 minutes.
+func TestMachineConfigResponderAndLimits(t *testing.T) {
+	old, err := ParseMachineConfig([]byte(`{"version":1,"server":"https://kwak.test","volunteers":["x"]}`), false)
+	if err != nil || old.Responder || old.ResumeTimeout != "" {
+		t.Fatalf("old config: %+v %v", old, err)
+	}
+	out, _ := json.Marshal(old)
+	for _, k := range []string{"responder", "responder_dir", "responder_prompt", "responder_command", "responder_continue",
+		"responder_own_agents", "resume_timeout", "responder_timeout"} {
+		var m map[string]any
+		json.Unmarshal(out, &m)
+		if _, ok := m[k]; ok {
+			t.Fatalf("an old config gained %s: %s", k, out)
+		}
+	}
+	c, err := ParseMachineConfig([]byte(`{"version":1,"server":"https://kwak.test","responder":true,`+
+		`"responder_command":["/bin/x","{session}"],"responder_own_agents":true,"resume_timeout":"20m","responder_timeout":"90s"}`), false)
+	if err != nil || !c.Responder || !c.ResponderOwnAgents || len(c.ResponderCommand) != 2 {
+		t.Fatalf("new config: %+v %v", c, err)
+	}
+	if RunTimeout(c.ResumeTimeout) != 20*time.Minute || RunTimeout(c.ResponderTimeout) != 90*time.Second {
+		t.Fatal("limits not read")
+	}
+	for _, s := range []string{"", "soon", "-5m", "0s"} {
+		if RunTimeout(s) != 15*time.Minute {
+			t.Fatalf("RunTimeout(%q) = %v", s, RunTimeout(s))
+		}
 	}
 }

@@ -517,7 +517,8 @@ func (l *Listener) moveHeldLocked(s *session, now time.Time) {
 	}
 	var from []*session
 	for _, o := range l.st.Sessions {
-		if o != s && o.Ended != nil && normCwd(o.Cwd) == cwd && o.waiting() > 0 {
+		// A responder record's questions are for the responder, not for a session in its folder.
+		if o != s && o.Ended != nil && !o.Responder && normCwd(o.Cwd) == cwd && o.waiting() > 0 {
 			from = append(from, o)
 		}
 	}

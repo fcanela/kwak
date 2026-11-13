@@ -108,6 +108,10 @@ func (l *Listener) mint(key, name string) error {
 		l.mu.Unlock()
 		return &errUnpaired{d, d}
 	}
+	if s.Responder {
+		l.mu.Unlock()
+		return l.mintResponder(key)
+	}
 	h, sid := s.Harness, s.SessionID
 	parentOK := s.Agent != "" && !s.AgentClosed && l.tokens[s.Agent] != ""
 	l.mu.Unlock()
@@ -275,7 +279,8 @@ func (l *Listener) reensure() {
 }
 
 // closeAgents closes a session's agents once its grace ran out (spec 5.8). Before the listener is
-// connected, or on a failure, the deadline stays, so a later tick retries.
+// connected, or on a failure, the deadline stays, so a later tick retries. A responder record
+// closes nothing: its account is shared by every responder run (5.18).
 func (l *Listener) closeAgents(key string) {
 	l.mu.Lock()
 	s := l.st.Sessions[key]
@@ -284,7 +289,7 @@ func (l *Listener) closeAgents(key string) {
 		return
 	}
 	var ids []string
-	if s.Agent != "" && !s.AgentClosed {
+	if s.Agent != "" && !s.AgentClosed && !s.Responder {
 		ids = append(ids, s.Agent)
 	}
 	for _, h := range s.Helpers {
@@ -333,6 +338,7 @@ const (
 // alive sends POST /agents/alive in chunks of 500 (spec 5.8). Only daily and use pings count as
 // activity at the registrar. What the registrar lists as unknown or closed loses its token; daily
 // and use pings re-mint it at once, a reconcile ping leaves that to the session's next hook.
+// Responder records are left out: the registrar does not track their shared account this way.
 func (l *Listener) alive(kind pingKind, keys ...string) {
 	l.mu.Lock()
 	if l.phase == wire.StateUnpaired || l.standing == "" {
@@ -348,7 +354,7 @@ func (l *Listener) alive(kind pingKind, keys ...string) {
 	var ids, picked []string
 	for k, s := range l.st.Sessions {
 		switch {
-		case kind == pingDaily && !s.Active, kind == pingUse && !want[k], kind == pingReconcile && s.Ended != nil:
+		case s.Responder, kind == pingDaily && !s.Active, kind == pingUse && !want[k], kind == pingReconcile && s.Ended != nil:
 			continue
 		}
 		picked = append(picked, k)

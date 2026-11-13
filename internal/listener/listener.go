@@ -38,6 +38,9 @@ type Registrar interface {
 	// ReportJoin joins userID, one of this pairing's own accounts, to the pairing's report room
 	// and returns the room id (5.17). wire.ErrNoReportRoom when the server has none for it.
 	ReportJoin(ctx context.Context, userID string) (roomID string, err error)
+	// Responder mints a token for the pairing's responder account, making it first when needed
+	// (decision 46). Each call logs the previous token out.
+	Responder(ctx context.Context) (wire.Agent, error)
 }
 
 // KeySetter is implemented by a Registrar that takes its owner key from the listener. The listener
@@ -56,7 +59,8 @@ type Matrix interface {
 	Leave(ctx context.Context, roomID string) error // after a report (5.17)
 }
 
-// Runner starts a background resume; os/exec in production. Cancelling ctx kills the run.
+// Runner starts a background resume or a responder run; os/exec in production. Cancelling ctx
+// kills the run.
 type Runner interface {
 	Start(ctx context.Context, dir string, argv []string, log io.Writer) (wait func() error, err error)
 }
@@ -144,7 +148,6 @@ const (
 	noHookEnd     = 14 * 24 * time.Hour
 	keepEnded     = 90 * 24 * time.Hour
 	resumeDelay   = 30 * time.Second
-	resumeKill    = 15 * time.Minute
 	membersTTL    = time.Minute
 	chainDepth    = proc.ChainDepth
 	aliveChunk    = wire.MaxIDs
@@ -197,6 +200,13 @@ type Listener struct {
 	membAt    time.Time
 	membGone  map[string]bool // ids a fresh fetch of members did not hold; reset with each fetch
 	dirty     bool
+
+	// The responder account (decision 46), memory only. respMu runs one POST /responder at a
+	// time; respErr and respWait hold back a new one for a while after a failure.
+	respMu   sync.Mutex
+	respUser string
+	respErr  error
+	respWait time.Time
 
 	// Reports (5.17), memory only. repMu runs one report at a time.
 	repMu    sync.Mutex

@@ -233,7 +233,11 @@ Things that would touch a real setup, and how this guide avoids them:
 - Settings in your DM with `@registrar` (for example `set question-timeout ...`) are owner
   settings. They apply to all your pairings, the real one too. Change them only if you mean that.
   Background resume is not one of them: `kwak config resume` sets it in the `config.json` of the
-  build you run, so a dev build's setting stays in its own folder.
+  build you run, so a dev build's setting stays in its own folder. The same holds for the
+  responder (`kwak config responder on`): a dev build's responder folder is
+  `~/.config/kwak-dev/responder`, its runs are real, billed `claude` runs, and with a test pairing
+  its account is only in `#agents-test`. Leave it off unless you test it (manual checks M19 to
+  M22).
 - The registrar and the Matrix server are shared. Changes there are deployed by the maintainer
   (`docs/deploy.md`). Ask the maintainer.
 
@@ -242,7 +246,7 @@ Things that would touch a real setup, and how this guide avoids them:
 [docs/manual-checks.md](manual-checks.md) has the checks that need a real Claude Code or Codex
 (spec 10.6). Most of them are **billed model runs**: each check says "billable" or "not billable".
 Run them only with the maintainer's go-ahead. M17 runs a test pairing with a dev build, step by
-step.
+step, and M19 to M22 the responder in the same way.
 
 ## Clean up
 

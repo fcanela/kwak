@@ -61,6 +61,9 @@ func (noRegistrar) Unpair(context.Context) error        { return errNoRegistrar 
 func (noRegistrar) ReportJoin(context.Context, string) (string, error) {
 	return "", errNoRegistrar
 }
+func (noRegistrar) Responder(context.Context) (wire.Agent, error) {
+	return wire.Agent{}, errNoRegistrar
+}
 
 func listenRig(t *testing.T) (ListenConfig, listener.Deps) {
 	dir := shortDir(t)

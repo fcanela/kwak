@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fcanela/kwak/internal/ipc"
+	"github.com/fcanela/kwak/internal/listener"
 	"github.com/fcanela/kwak/internal/wire"
 	"github.com/fcanela/kwak/internal/wire/wiretest"
 )
@@ -39,6 +40,8 @@ func TestStatus(t *testing.T) {
 		"Key valid until: 2027-01-31",
 		"Owner settings: question timeout 15m\n",
 		"Background resume on this machine: replies, mentions (Claude Code sessions only); 1 runs, 0 running",
+		"Responder on this machine: on, folder /home/u/kwak-responder\n", // decision 46
+		"Responder account: " + wiretest.ResponderUser,
 		"Loop ceiling: no more background runs for thread $Qx1abc after 50; a message from a person in it starts the count again",
 		"Hourly limit: 300 background runs started in the last hour; the next may start at 2026-11-02 11:20 UTC",
 		"Checks: secrets scan on; outgoing command off; incoming command /opt/kwak/check-in; 1 waiting for the incoming check",
@@ -61,10 +64,21 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+// With responder_own_agents on, the responder line says so (decision 46).
+func TestStatusResponderOwnAgents(t *testing.T) {
+	r := newRig(t)
+	reply := strings.Replace(ipcRow(t, "status, syncing").Reply, `{"v":1,`, `{"v":1,"responder_own_agents":true,`, 1)
+	r.ln.replies[wire.OpStatus] = []string{reply}
+	_, out, _ := r.run(r.cli.Status, "")
+	if want := "Responder on this machine: on, folder /home/u/kwak-responder, answers your own agents too\n"; !strings.Contains(out, want) {
+		t.Errorf("status lacks %q:\n%s", want, out)
+	}
+}
+
 func TestStatusStates(t *testing.T) {
 	cases := map[string][]string{
 		"status, unpaired":                       {"Listener: not paired", wiretest.TextUnpaired, "Sessions: none"},
-		"status, waiting for the keyring":        {"Listener: waiting for the keyring", "waiting for the keyring (locked?)", "Caller checks: claimed"},
+		"status, waiting for the keyring":        {"Listener: waiting for the keyring", "waiting for the keyring (locked?)", "Caller checks: claimed", "Responder on this machine: off\n"},
 		"status, connecting after a state reset": {"Listener: connecting", "Last error: registrar unreachable, HTTP 502", "State reset: messages since the last good state may be missed."},
 	}
 	for row, wants := range cases {
@@ -124,7 +138,7 @@ func TestInbox(t *testing.T) {
 
 // kwak config resume shows and sets this machine's background resume triggers (decision 44): a
 // comma list stored as written in full (all is replies and mentions), off removes the key, and
-// open is refused until the responder exists. Nothing goes to the registrar or the listener.
+// open is refused with a pointer to the responder (decision 46). Nothing goes to the registrar or the listener.
 func TestConfigResume(t *testing.T) {
 	r := newRig(t)
 	if code, _, errs := r.run(r.cli.Config, "", "resume", "replies"); code != 1 || !strings.Contains(errs, "not paired") {
@@ -162,7 +176,7 @@ func TestConfigResume(t *testing.T) {
 		if code != 2 || resume() != "<none>" {
 			t.Errorf("%q: exit %d, resume %s", bad, code, resume())
 		}
-		if strings.Contains(bad, "open") && !strings.Contains(errs, "not available yet: it needs the responder") {
+		if strings.Contains(bad, "open") && !strings.Contains(errs, "answered by the responder") {
 			t.Errorf("%q: %s", bad, errs)
 		}
 	}
@@ -177,6 +191,46 @@ func TestConfigResume(t *testing.T) {
 	}
 	if code, _, _ := r.run(r.cli.Config, "", "colour"); code != 2 {
 		t.Errorf("unknown setting: exit %d", code)
+	}
+}
+
+// kwak config responder on|off (decision 46) sets "responder" in config.json, keeps unknown
+// fields, and on makes the responder folder next to config.json with the default AGENTS.md,
+// never writing over the user's. Nothing goes to the registrar or the listener.
+func TestConfigResponder(t *testing.T) {
+	r := newRig(t)
+	if code, _, errs := r.run(r.cli.Config, "", "responder", "on"); code != 1 || !strings.Contains(errs, "not paired") {
+		t.Errorf("unpaired: exit %d: %s", code, errs)
+	}
+	r.paired()
+	dir, _ := r.cli.env.ConfigDir()
+	folder := filepath.Join(dir, "responder")
+	if code, out, _ := r.run(r.cli.Config, "", "responder"); code != 0 || !strings.Contains(out, "Responder on this machine: off. Its folder: "+folder) {
+		t.Errorf("show: exit %d:\n%s", code, out)
+	}
+	code, out, errs := r.run(r.cli.Config, "", "responder", "on")
+	if code != 0 || r.config()["responder"] != true || !strings.Contains(out, "is now on") || !strings.Contains(out, folder) ||
+		strings.Contains(out, "run kwak config resume-exe") {
+		t.Fatalf("on: exit %d: %s %s", code, out, errs)
+	}
+	if b, err := os.ReadFile(filepath.Join(folder, "AGENTS.md")); err != nil || string(b) != listener.ResponderAgents {
+		t.Fatalf("AGENTS.md %q %v", b, err)
+	}
+	os.WriteFile(filepath.Join(folder, "AGENTS.md"), []byte("mine"), 0o600)
+	r.run(r.cli.Config, "", "responder", "on")
+	if b, _ := os.ReadFile(filepath.Join(folder, "AGENTS.md")); string(b) != "mine" {
+		t.Fatalf("AGENTS.md written over: %q", b)
+	}
+	if code, out, _ := r.run(r.cli.Config, "", "responder", "off"); code != 0 || r.config()["responder"] != nil || !strings.Contains(out, "is now off") {
+		t.Errorf("off: exit %d %s, config %v", code, out, r.config()["responder"])
+	}
+	for _, bad := range [][]string{{"responder", "maybe"}, {"responder", "on", "now"}} {
+		if code, _, _ := r.run(r.cli.Config, "", bad...); code != 2 {
+			t.Errorf("%q: exit %d", bad, code)
+		}
+	}
+	if len(r.reg.log()) != 0 || len(r.ln.ops) != 0 || r.config()["future_field"] == nil {
+		t.Error("config responder called out or lost a field")
 	}
 }
 

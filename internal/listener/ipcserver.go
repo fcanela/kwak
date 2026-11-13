@@ -241,12 +241,24 @@ func (l *Listener) status(c *client) wire.StatusResponse {
 		if len(live.Resume) > 0 {
 			r.Resume = strings.Join(live.Resume, ", ")
 		}
+		r.Responder = "off"
+		if live.Responder {
+			r.Responder, r.ResponderDir = "on", ResponderDir(live.Conf, l.cfg.ConfigPath)
+		}
+		r.ResponderAccount, r.ResponderOwn = l.respUser, live.OwnAgents
+		if l.respErr != nil {
+			r.ResponderError = describe(l.respErr)
+		}
 		if l.st.Settings != nil {
 			r.Settings, r.KeyExpiresAt = *l.st.Settings, l.st.KeyExpires
 		}
 		if l.phase == wire.StateSyncing {
 			r.LastSync = l.lastSync
 		}
+	}
+	answers := map[string]string{}
+	for root, t := range l.st.RespThreads {
+		answers[t.Session] = root
 	}
 	for _, s := range l.sortedSessions() {
 		if s.Ended != nil && s.waiting() == 0 {
@@ -272,6 +284,8 @@ func (l *Listener) status(c *client) wire.StatusResponse {
 		switch {
 		case s.NoAgent != "":
 			ss.Note = s.NoAgent
+		case s.Responder:
+			ss.Note = "responder run for thread " + answers[s.Key]
 		case s.LastHook.IsZero():
 			ss.Note = "no hook seen for session " + s.Key
 		}

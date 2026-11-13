@@ -134,17 +134,16 @@ func (c *CLI) pair(ctx context.Context, f pairFlags, stdin io.Reader, stdout io.
 		return nil, errors.New(msg)
 	}
 
-	cfg := &Config{MachineConfig: wire.MachineConfig{
-		Version: ConfigVersion, Server: server, ServerName: got.ServerName, Owner: got.Owner,
-		Machine: machine, PairingID: got.PairingID, RoomID: got.RoomID, StandingUser: got.StandingUser,
-		ResumeMax: DefaultResumeMax, Test: got.Test,
-		KeyringUser: secrets.PairingKeyName(got.ServerName, got.PairingID),
-	}}
+	cfg := &Config{MachineConfig: wire.MachineConfig{ResumeMax: DefaultResumeMax}}
 	if old != nil {
-		cfg.ResumeMax, cfg.ResumeExe, cfg.ThreadCeiling, cfg.extra = old.ResumeMax, old.ResumeExe, old.ThreadCeiling, old.extra
-		cfg.CheckOutgoing, cfg.CheckIncoming, cfg.ResumePerHour = old.CheckOutgoing, old.CheckIncoming, old.ResumePerHour
-		cfg.Resume = old.Resume
+		// A re-pair keeps every machine setting and every key this kwak does not know; only the
+		// pairing's own fields below change.
+		*cfg = *old
 	}
+	mc := &cfg.MachineConfig
+	mc.Version, mc.Server, mc.ServerName, mc.Owner = ConfigVersion, server, got.ServerName, got.Owner
+	mc.Machine, mc.PairingID, mc.RoomID, mc.StandingUser = machine, got.PairingID, got.RoomID, got.StandingUser
+	mc.Test, mc.KeyringUser = got.Test, secrets.PairingKeyName(got.ServerName, got.PairingID)
 	// Each pairing has its own keyring item (decision 40), so a re-pair writes a new one next to
 	// the old one and removes the old one only once the registrar took the new key.
 	keyName := cfg.KeyringUser

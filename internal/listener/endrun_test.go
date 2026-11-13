@@ -235,7 +235,7 @@ func TestTimedOutRunGivesWarning(t *testing.T) {
 	e.connect()
 	e.runner.stubborn = true
 	uid, _ := e.endedWithThreads(t.TempDir())
-	e.clk.Advance(resumeKill)
+	e.clk.Advance(wire.DefaultRunTimeout)
 	e.runner.mu.Lock()
 	ctx := e.runner.runs[0].ctx
 	e.runner.mu.Unlock()

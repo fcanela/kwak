@@ -16,7 +16,10 @@ const (
 	agentPrefix = "agent."
 	// ListenerPart is the last part of a listener account's name (decision 42), and a helper name
 	// no helper may take (ValidHelper).
-	ListenerPart       = "listener"
+	ListenerPart = "listener"
+	// ResponderPart is the last part of a responder account's name (decision 46), and a helper
+	// name no helper may take (ValidHelper).
+	ResponderPart      = "responder"
 	testStandingSuffix = "listener-test"
 	testPairSuffix     = "test"
 )
@@ -94,11 +97,11 @@ func HelperLocalpart(parent, helper string) (string, error) {
 }
 
 // ValidHelper reports whether name may be a new helper's name: the HelperName shape, and not
-// "listener", which listener account names end with (decision 42). ParseLocalpart still reads a
-// helper named "listener" made before decision 42: its middle part is hex, so it is never taken
-// for a listener account.
+// "listener" or "responder", which listener and responder account names end with (decisions 42
+// and 46). ParseLocalpart still reads a helper with one of those names made before: its middle
+// part is hex, so it is never taken for a listener or responder account.
 func ValidHelper(name string) bool {
-	return name != ListenerPart && HelperName.MatchString(name)
+	return name != ListenerPart && name != ResponderPart && HelperName.MatchString(name)
 }
 
 // ListenerLocalpart returns the name of a pairing's listener account (decision 42):
@@ -109,6 +112,25 @@ func ListenerLocalpart(owner, pair string, test bool) string {
 		pair += "-" + testPairSuffix
 	}
 	return agentPrefix + owner + "." + pair + "." + ListenerPart
+}
+
+// ResponderLocalpart returns the name of a pairing's responder account (decision 46): the
+// pairing's listener account name with "responder" in place of "listener".
+func ResponderLocalpart(owner, pair string, test bool) string {
+	if test {
+		pair += "-" + testPairSuffix
+	}
+	return agentPrefix + owner + "." + pair + "." + ResponderPart
+}
+
+// ResponderOf returns the responder account name that goes with a listener account name of
+// decision 42, or "" when lp is not one (an old per-owner name has no word pair).
+func ResponderOf(lp string) string {
+	n, err := ParseLocalpart(lp)
+	if err != nil || n.Kind != KindStanding || n.Pair == "" {
+		return ""
+	}
+	return ResponderLocalpart(n.Owner, n.Pair, n.Test)
 }
 
 // InAgentNamespace reports whether a localpart starts with "agent.", the namespace the registrar
@@ -123,10 +145,11 @@ func InAgentNamespace(lp string) bool {
 //	helper         agent.<owner>.<hex 16 to 32>.<helper>
 //	listener       agent.<owner>.<word>-<word>.listener (Kind standing, Pair set; decision 42)
 //	test listener  agent.<owner>.<word>-<word>-test.listener (Kind standing, Pair and Test set)
+//	responder      agent.<owner>.<word>-<word>[-test].responder (Kind responder, decision 46)
 //	old standing   agent.<owner>.listener, agent.<owner>.listener-test (Kind standing, Pair empty)
 //
-// A three-part name is a listener account when its middle part holds a dash, and a helper when it
-// is hex: hex never holds a dash, so the two never overlap. Each word is 1 to 16 lowercase letters
+// A three-part name is a listener or responder account when its middle part holds a dash, and a
+// helper when it is hex: hex never holds a dash, so the two never overlap. Each word is 1 to 16 lowercase letters
 // and never "test"; the words are not checked against the lists, so a name stays readable if a
 // list changes. The two old standing names are still read, so their records can be closed.
 func ParseLocalpart(lp string) (Name, error) {
@@ -142,10 +165,16 @@ func ParseLocalpart(lp string) (Name, error) {
 	if len(parts) == 3 {
 		if strings.Contains(id, "-") {
 			pair, test := parsePairPart(id)
-			if pair == "" || parts[2] != ListenerPart {
+			kind := KindStanding
+			switch {
+			case pair == "":
+				return Name{}, ErrBadLocalpart
+			case parts[2] == ResponderPart:
+				kind = KindResponder
+			case parts[2] != ListenerPart:
 				return Name{}, ErrBadLocalpart
 			}
-			return Name{Kind: KindStanding, Owner: owner, Pair: pair, Test: test}, nil
+			return Name{Kind: kind, Owner: owner, Pair: pair, Test: test}, nil
 		}
 		if len(id) < 16 || len(id) > 32 || !isHex(id) || !HelperName.MatchString(parts[2]) {
 			return Name{}, ErrBadLocalpart

@@ -120,6 +120,30 @@ func TestRegistrarAgainstTuwunel(t *testing.T) {
 		t.Fatalf("standing token: members %v, %v", members, err)
 	}
 
+	// The pairing's responder account (decision 46): made and joined at the first call, a new
+	// token at the second, which logs the first one out.
+	var rs wire.Agent
+	if c := callAPI(t, api.URL, "POST", wire.PathResponder, cr.OwnerKey, struct{}{}, &rs); c != 200 || !rs.New ||
+		rs.UserID != "@agent.alice."+m[1]+".responder:"+server || rs.RoomID != room {
+		t.Fatalf("responder: %d %+v", c, rs)
+	}
+	if members, _ := admin.JoinedMembers(ctx, room); !slices.Contains(members, rs.UserID) {
+		t.Fatal("the responder is not in the agents room")
+	}
+	if name := displayName(t, env, rs.AccessToken, rs.UserID); name != "agent.alice."+m[1]+".responder" {
+		t.Fatalf("responder display name %q", name)
+	}
+	var rs2 wire.Agent
+	if c := callAPI(t, api.URL, "POST", wire.PathResponder, cr.OwnerKey, struct{}{}, &rs2); c != 200 || rs2.New || rs2.UserID != rs.UserID {
+		t.Fatalf("responder again: %d %+v", c, rs2)
+	}
+	if _, err := env.Client(rs2.AccessToken).Send(ctx, room, "it-r1", map[string]string{"msgtype": "m.text", "body": "from the responder"}); err != nil {
+		t.Fatalf("the responder sends: %v", err)
+	}
+	if _, err := env.Client(rs.AccessToken).Send(ctx, room, "it-r2", map[string]string{"msgtype": "m.text", "body": "old"}); !matrix.IsCode(err, matrix.ErrUnknownToken) {
+		t.Fatalf("the responder's first token after the second call: %v", err)
+	}
+
 	// One agent: create, close, reopen.
 	session := "4f2a9c1e-7b03-4d5a-8c0d-" + fmt.Sprintf("%012x", time.Now().UnixNano()&0xffffffffffff)
 	req := wire.AgentRequest{RequestID: strings.Repeat("a1", 16), Harness: wire.HarnessClaude, Session: session}

@@ -37,6 +37,7 @@ const (
 	PathUnpair      = "/unpair"
 	PathMe          = "/me"
 	PathReportJoin  = "/report/join"
+	PathResponder   = "/responder"
 )
 
 // MaxBody is the largest API request body the registrar reads.
@@ -150,7 +151,8 @@ type AgentRequest struct {
 	Helper    string  `json:"helper"`
 }
 
-// Agent is the 200 body of POST /agents.
+// Agent is the 200 body of POST /agents, and of POST /responder (decision 46), which takes {} and
+// answers the pairing's responder account.
 type Agent struct {
 	UserID      string `json:"user_id"`
 	AccessToken string `json:"access_token"`
@@ -367,11 +369,18 @@ type StatusResponse struct {
 	ResumeNextAt    time.Time `json:"resume_next_at,omitzero"`
 	// The message checks (spec 5.16): the check commands ("" is off), the messages waiting for the
 	// incoming check, and the latest messages a check stopped, oldest first.
-	CheckOutgoing string          `json:"check_outgoing,omitempty"`
-	CheckIncoming string          `json:"check_incoming,omitempty"`
-	CheckWaiting  int             `json:"check_waiting,omitempty"`
-	Rejected      []Rejection     `json:"rejected,omitempty"`
-	Sessions      []SessionStatus `json:"sessions"`
+	CheckOutgoing string      `json:"check_outgoing,omitempty"`
+	CheckIncoming string      `json:"check_incoming,omitempty"`
+	CheckWaiting  int         `json:"check_waiting,omitempty"`
+	Rejected      []Rejection `json:"rejected,omitempty"`
+	// The responder of this machine (decision 46): "on" or "off", its folder, its account once
+	// minted, whether it answers the owner's own agents, and the last error of POST /responder.
+	Responder        string          `json:"responder,omitempty"`
+	ResponderDir     string          `json:"responder_dir,omitempty"`
+	ResponderAccount string          `json:"responder_account,omitempty"`
+	ResponderOwn     bool            `json:"responder_own_agents,omitempty"`
+	ResponderError   string          `json:"responder_error,omitempty"`
+	Sessions         []SessionStatus `json:"sessions"`
 }
 
 // Rejection is one message a check stopped (spec 5.16). Way is "outgoing" (a post by a local agent
@@ -460,9 +469,13 @@ const (
 	KindSession  Kind = "session"
 	KindHelper   Kind = "helper"
 	KindStanding Kind = "standing"
+	// KindResponder is a pairing's responder account (decision 46): one per pairing, shared by
+	// every responder run of that machine.
+	KindResponder Kind = "responder"
 )
 
-// Name is a parsed agent localpart. Hex is empty for a standing name, Helper set only for a helper.
+// Name is a parsed agent localpart. Hex is empty for a standing or responder name, Helper set only
+// for a helper. A responder name has Pair and, for a test pairing, Test, like a listener name.
 // A standing name is a pairing's listener account (decision 42), with Pair its word pair
 // ("brave-heron"), or one of the per-owner standing accounts of earlier builds, with Pair empty.
 // Test is set only for a standing name of a test pairing: "<pair>-test", or the old

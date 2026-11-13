@@ -28,22 +28,33 @@ type Index struct {
 	Roots      map[string]string // event id -> agent, for thread roots sent by Mine
 	Threads    map[string]Thread // root -> latest event
 	Volunteers map[string]string // session key -> its agent's user id
-	Incomplete bool              // Roots may miss entries (state reset)
-	Missing    []string          // thread roots Route could not attribute while Incomplete
-	fetched    map[string]bool
+	// The responder (decision 46): on or off, as config.json says before each batch, this
+	// machine's owner, whether the owner's own agents are answered, the responder account (""
+	// until minted) and the threads its runs answer.
+	Responder     bool
+	Owner         string
+	OwnAgents     bool
+	ResponderUser string
+	RespThreads   map[string]respThread
+	Incomplete    bool     // Roots may miss entries (state reset)
+	Missing       []string // thread roots Route could not attribute while Incomplete
+	fetched       map[string]bool
 }
 
 func newIndex(st *state, room string) *Index {
 	return &Index{Room: room, Mine: st.Mine, Roots: st.Roots, Threads: st.Threads,
-		Volunteers: map[string]string{}, fetched: map[string]bool{}}
+		Volunteers: map[string]string{}, RespThreads: st.RespThreads, fetched: map[string]bool{}}
 }
 
-// Delivery is one message for one local agent.
+// Delivery is one message for one local agent. A delivery to the responder (decision 46) has
+// Responder set, and an empty Session for a new question, which gets its own record before
+// anything else (responderLocked).
 type Delivery struct {
-	UserID  string        `json:"user_id"`
-	Session string        `json:"session"`
-	Helper  string        `json:"helper,omitempty"`
-	Reason  render.Reason `json:"reason"`
+	UserID    string        `json:"user_id"`
+	Session   string        `json:"session"`
+	Helper    string        `json:"helper,omitempty"`
+	Reason    render.Reason `json:"reason"`
+	Responder bool          `json:"responder,omitempty"`
 }
 
 const (
@@ -107,7 +118,9 @@ func prio(r render.Reason) int {
 }
 
 // Route decides which local agents an event is addressed to. It does no I/O. It records thread
-// roots sent by local agents and the latest event of each thread in idx.
+// roots sent by local agents and the latest event of each thread in idx. With the responder on, an
+// open question from another owner's agent goes to it, and so does a later message of the asker in
+// that thread (decision 46).
 func Route(ev matrix.Event, idx *Index) []Delivery {
 	if ev.RoomID != idx.Room || ev.Type != "m.room.message" {
 		return nil
@@ -120,6 +133,7 @@ func Route(ev matrix.Event, idx *Index) []Delivery {
 		idx.Roots[ev.EventID] = ev.Sender
 	}
 	targets := map[string]render.Reason{}
+	var resp *Delivery
 	add := func(u string, r render.Reason) {
 		if prev, ok := targets[u]; !ok || prio(r) > prio(prev) {
 			targets[u] = r
@@ -135,6 +149,9 @@ func Route(ev matrix.Event, idx *Index) []Delivery {
 		if t, ok := idx.Threads[c.relEvent]; !ok || ev.TS >= t.TS {
 			idx.Threads[c.relEvent] = Thread{Latest: ev.EventID, TS: ev.TS}
 		}
+		if t, ok := idx.RespThreads[c.relEvent]; ok && idx.Responder && ev.Sender == t.Asker {
+			resp = &Delivery{UserID: idx.ResponderUser, Session: t.Session, Reason: render.OpenQuestion, Responder: true}
+		}
 		if a, ok := idx.Roots[c.relEvent]; ok {
 			add(a, render.YourThread)
 		} else if idx.Incomplete && !idx.fetched[c.relEvent] {
@@ -148,6 +165,10 @@ func Route(ev matrix.Event, idx *Index) []Delivery {
 		for _, a := range idx.Volunteers {
 			add(a, render.OpenQuestion)
 		}
+		if idx.Responder && idx.asksResponder(ev.Sender) {
+			resp = &Delivery{UserID: idx.ResponderUser, Session: idx.RespThreads[ev.EventID].Session,
+				Reason: render.OpenQuestion, Responder: true}
+		}
 	}
 	delete(targets, ev.Sender)
 	out := make([]Delivery, 0, len(targets))
@@ -156,5 +177,8 @@ func Route(ev matrix.Event, idx *Index) []Delivery {
 		out = append(out, Delivery{UserID: u, Session: a.Session, Helper: a.Helper, Reason: r})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UserID < out[j].UserID })
+	if resp != nil {
+		out = append(out, *resp)
+	}
 	return out
 }

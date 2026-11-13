@@ -417,7 +417,8 @@ var IPC = []IPCCase{
 			`"rejected":[{"at":"2026-11-02T10:30:00Z","way":"outgoing","session":"claude:` + ClaudeSession + `","agent":"` + ClaudeAgent + `",` +
 			`"tool":"reply","thread":"$Qx1abc","check":"secrets","reason":"it looks like it holds a secret (a GitHub token)"},` +
 			`{"at":"2026-11-02T10:35:00Z","way":"incoming","session":"claude:` + ClaudeSession + `","agent":"` + ClaudeAgent + `",` +
-			`"sender":"` + OtherAgent + `","thread":"$Qx1abc","event":"$Ev2def","check":"command","reason":"it asks for an action"}],"sessions":[` +
+			`"sender":"` + OtherAgent + `","thread":"$Qx1abc","event":"$Ev2def","check":"command","reason":"it asks for an action"}],` +
+			`"responder":"on","responder_dir":"/home/u/kwak-responder","responder_account":"` + ResponderUser + `","sessions":[` +
 			`{"key":"claude:` + ClaudeSession + `","harness":"claude","session_id":"` + ClaudeSession + `","cwd":"` + ClaudeCwd + `",` +
 			`"agent":"` + ClaudeAgent + `","helpers":["` + HelperAgent + `"],"volunteer":false,"tools":true,` +
 			`"started":"2026-11-02T09:00:00Z","last_hook":"2026-11-02T10:40:00Z","inbox":2},` +
@@ -436,14 +437,14 @@ var IPC = []IPCCase{
 		Request: `{"v":1,"op":"status"}`,
 		Reply: `{"v":1,"ok":true,"kwak":"0.1.0","state":"waiting_keyring","detail":"waiting for the keyring (locked?)",` +
 			`"server":"https://kwak.test","owner":"fcanela","machine":"laptop","pairing_id":"3f9a1c2e","caller_checks":"claimed",` +
-			`"resume":"off","resume_runs":0,"resume_active":0,"sessions":[]}`,
+			`"resume":"off","resume_runs":0,"resume_active":0,"responder":"off","sessions":[]}`,
 	},
 	{
 		Name:    "status, connecting after a state reset",
 		Request: `{"v":1,"op":"status"}`,
 		Reply: `{"v":1,"ok":true,"kwak":"0.1.0","state":"connecting","server":"https://kwak.test","owner":"fcanela",` +
 			`"machine":"laptop","pairing_id":"3f9a1c2e","sync_error":"registrar unreachable, HTTP 502","state_reset":true,` +
-			`"caller_checks":"peer","resume":"off","resume_runs":0,"resume_active":0,"sessions":[]}`,
+			`"caller_checks":"peer","resume":"off","resume_runs":0,"resume_active":0,"responder":"off","sessions":[]}`,
 	},
 	{
 		Name:    "inbox",

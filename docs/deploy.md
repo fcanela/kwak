@@ -833,3 +833,70 @@ says to send `set resume` to the bot, which now answers with the line above.
   saves the file, so going back and forward again needs no `kwak config resume`. It follows the
   registrar's value again: off with the new image, the value set with `set resume` with an older
   one.
+
+### The responder account (decision 46)
+
+This applies when a registrar from before decision 46 gets the image with `POST /responder`, the
+route that gives each pairing its responder account, `@agent.<owner>.<adjective>-<animal>.responder`
+(spec 3.12). If the server still runs an older image than the ones above, do those steps first.
+
+What changes in the strictly read files:
+
+- **`config.json`**: nothing. No new key.
+- **`state.json`**: no new key. A responder account's record in `"agents"` uses only keys an older
+  image knows, with a new value of one of them, `"kind": "responder"`. An older image reads it (it
+  does not check the kind) and treats it as an account with no session: never closed for being
+  idle, refused by `POST /agents/close` and `POST /agents/alive`, closed when its pairing is
+  revoked. It has no `POST /responder`, so it never gives the account a new token.
+
+**Deploy, registrar first, then the machines:**
+
+1. Copy `state.json` aside (`cp -p state.json state.json.before-responder` in
+   `/srv/kwak-registrar/data`). It is a backup only.
+2. Build the new image (step 3) and pin the commit you built.
+3. Put the new image in `compose.yaml` and `docker compose -f /srv/kwak-registrar/compose.yaml up
+   -d`. Nothing else changes: no `config.json` change, no tuwunel change, no new registration (the
+   name is inside `agent.*`), no nginx or firewall change (the route is under `/_kwak/v1/`).
+4. Check: `ps` shows the registrar running, not restarting, and
+   `curl -s -X POST http://127.0.0.1:8010/_kwak/v1/responder` answers `401` with `KWAK_BAD_KEY`
+   (an older image answers `404` with `M_UNRECOGNIZED`).
+5. Then, on each machine that should answer open questions: update `kwak`, run `kwak config
+   resume-exe` if it was never run there, and `kwak config responder on`. Machines that do not run
+   it need nothing: the responder is off by default, and an older `kwak` never calls the route.
+6. Check on that machine: `kwak status` shows "Responder on this machine: on, folder ...", and after
+   the first open question from another person's agent, "Responder account: ...". In Element the
+   account is a member of `#agents` (of `#agents-test` only, for a test pairing).
+
+**A new `kwak` against an older registrar** gets `404 M_UNRECOGNIZED` at `POST /responder`. It
+starts no run (no billed run that could not post), asks again at most once a minute while questions
+wait, and `kwak status` says "The responder account is not ready: registrar answered HTTP 404
+M_UNRECOGNIZED". The questions it took wait in their records and run once the registrar has the
+route. So the order matters only for when the first answer comes, not for safety.
+
+**Roll back.**
+
+- **Registrar:** the older image reads the file, so putting it back works with no `jq` step. The
+  responder accounts then stay in their rooms, and a machine whose listener already holds a token
+  keeps posting with it until that listener restarts. To end them at once: stop the registrar, mark
+  the records closed, start the older image; its cleanup retry makes each account leave its room
+  and logs every device out at its start:
+
+  ```
+  cd /srv/kwak-registrar/data
+  cp -p state.json state.json.before-rollback
+  jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.agents |= with_entries(
+      if .value.kind == "responder" and .value.closed == null
+      then .value += {closed: $now, close_reason: "rollback", cleanup_done: false, pending_since: null}
+      else . end)' state.json.before-rollback > state.json.new
+  chown --reference=state.json.before-rollback state.json.new
+  chmod 0600 state.json.new
+  jq -e .version state.json.new && mv state.json.new state.json
+  ```
+
+  Going forward again later needs nothing more: a closed record of a live pairing is opened again
+  at the next `POST /responder`.
+- **Machines:** before going back to an older `kwak`, run `kwak config responder off` and wait until
+  `kwak status` shows no responder run going. An older `kwak` ignores the responder keys in
+  `config.json` and keeps them. In `state.json` it reads each responder record as an ended Claude
+  Code session in the responder folder; it routes nothing to them, so they wait untouched until
+  they are pruned 90 days later.

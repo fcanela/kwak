@@ -60,32 +60,40 @@ state."/h/hooks.json:subagent_stop:0:0".trusted_hash = "sha256:ee"
 }
 
 type fixture struct {
-	dir    string
-	home   string
-	cfgDir string
-	keys   *secretstest.Memory
-	status string
-	callOK bool
-	env    map[string]string
-	path   map[string]string
-	stat   map[string]bool
-	goos   string
-	dev    bool
+	dir     string
+	home    string
+	cfgDir  string
+	keys    *secretstest.Memory
+	status  string
+	callOK  bool
+	env     map[string]string
+	path    map[string]string
+	stat    map[string]bool
+	goos    string
+	dev     bool
+	service string // what Service answers
+}
+
+// responderOn turns the responder on in config.json, with more JSON keys from extra.
+func (f *fixture) responderOn(t *testing.T, extra string) {
+	write(t, filepath.Join(f.cfgDir, "config.json"), `{"version":1,"server":"https://kwak.test","server_name":"kwak.test",`+
+		`"owner":"fcanela","machine":"laptop","pairing_id":"3f9a1c2e","responder":true`+extra+`}`)
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	dir := t.TempDir()
 	f := &fixture{
-		dir:    dir,
-		home:   filepath.Join(dir, "home"),
-		cfgDir: filepath.Join(dir, "config"),
-		keys:   secretstest.Mem(),
-		callOK: true,
-		env:    map[string]string{},
-		path:   map[string]string{"kwak": exe},
-		stat:   map[string]bool{},
-		goos:   "linux",
+		dir:     dir,
+		home:    filepath.Join(dir, "home"),
+		cfgDir:  filepath.Join(dir, "config"),
+		keys:    secretstest.Mem(),
+		callOK:  true,
+		env:     map[string]string{},
+		path:    map[string]string{"kwak": exe},
+		stat:    map[string]bool{},
+		goos:    "linux",
+		service: "active",
 	}
 	f.status = wiretest.IPC[len(wiretest.IPC)-1].Reply
 	for _, row := range wiretest.IPC {
@@ -166,6 +174,7 @@ func (f *fixture) deps() DoctorDeps {
 		ConfigDir:  func() (string, error) { return f.cfgDir, nil },
 		SocketPath: func() (string, error) { return "/run/user/1000/kwak/kwak.sock", nil },
 		Dev:        f.dev,
+		Service:    func() (string, error) { return f.service, nil },
 	}
 }
 
@@ -286,6 +295,27 @@ func TestDoctorProblems(t *testing.T) {
 			codex := filepath.Join(f.home, ".codex")
 			runSetup(t, env{codexHome: codex, exe: "/old/kwak", goos: "linux"}, "codex", "--write")
 		}, 0, []string{"differ from this kwak (SessionStart, UserPromptSubmit, PostToolUse, Stop, SubagentStop, SessionEnd)"}, []string{"no hooks.state entry"}},
+		{"responder on, no service", func(t *testing.T, f *fixture) {
+			f.responderOn(t, "")
+			f.service = "not installed"
+		}, 0, []string{"ok    responder: on, in " + filepath.Join("CFG", "responder"),
+			"warn  responder: the listener is not installed as a service", "has no AGENTS.md",
+			"warn  responder: no path of claude"}, nil},
+		{"responder on, service, folder ready", func(t *testing.T, f *fixture) {
+			f.responderOn(t, `,"resume_exe":{"claude":"/opt/bin/claude"}`)
+			os.MkdirAll(filepath.Join(f.cfgDir, "responder"), 0o700)
+			write(t, filepath.Join(f.cfgDir, "responder", "AGENTS.md"), "rules")
+		}, 0, []string{"ok    responder: on"}, []string{"warn  responder"}},
+		{"responder command without its follow-up command", func(t *testing.T, f *fixture) {
+			f.responderOn(t, `,"responder_command":["/opt/x","{session}"]`)
+			os.MkdirAll(filepath.Join(f.cfgDir, "responder"), 0o700)
+			write(t, filepath.Join(f.cfgDir, "responder", "AGENTS.md"), "rules")
+		}, 0, []string{"warn  responder: set both responder_command and responder_continue, or neither; no responder run starts"}, nil},
+		{"responder on, dev build", func(t *testing.T, f *fixture) {
+			f.responderOn(t, "")
+			f.dev, f.service = true, "not installed"
+		}, 0, []string{"skip  responder: a dev build has no service"}, []string{"not installed as a service"}},
+		{"responder off", func(t *testing.T, f *fixture) { f.service = "not installed" }, 0, nil, []string{"responder"}},
 		{"codex not set up", func(t *testing.T, f *fixture) {
 			codex := filepath.Join(f.home, ".codex")
 			os.Remove(filepath.Join(codex, "config.toml"))
@@ -308,6 +338,7 @@ func TestDoctorProblems(t *testing.T) {
 				t.Errorf("exit %d, want %d", code, c.code)
 			}
 			for _, s := range c.want {
+				s = strings.ReplaceAll(s, "CFG", f.cfgDir)
 				if !strings.Contains(out.String(), s) {
 					t.Errorf("output lacks %q", s)
 				}

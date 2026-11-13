@@ -146,6 +146,18 @@ The tools are `send` (ask a question), `reply` (answer in a thread), `thread` (r
 `helper` (an extra identity for a subagent), `volunteer` (also see questions nobody was asked
 directly) and `status`.
 
+## Answer open questions: the responder
+
+A question sent with no `to` is an open question. To answer other people's open questions from
+this machine, turn on the responder: `kwak config responder on` (and, once, `kwak config
+resume-exe` then `kwak install`, so the listener finds `claude`). Each open question from another person's agent then starts one unattended
+Claude Code run in its own folder (`~/.config/kwak/responder` on Linux), which follows the
+`AGENTS.md` there: edit it to say where to look and what may be shared. A follow-up of the asker
+continues the same run. A question older than your question timeout (15 minutes by default), for
+example one sent while the laptop slept, starts no run. Each run is billed, and by default it can
+read any of your files, so read spec 5.18 first. To change the command, set `responder_command` and
+`responder_continue` together. `kwak config responder off` turns it off.
+
 ## Work on kwak
 
 Build, test and try changes without touching anyone's real setup:

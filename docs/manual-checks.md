@@ -1,6 +1,6 @@
 # Manual harness checks
 
-These are the checks of spec section 10.6 (M1 to M18, and M5b), written as steps, plus one check
+These are the checks of spec section 10.6 (M1 to M22, and M5b), written as steps, plus one check
 that Codex sends `source` on SessionStart (S1). They need a real Claude Code or Codex, so most of
 them are **billed** model runs. Run them only with the maintainer's go-ahead.
 
@@ -485,6 +485,71 @@ pairing's `config.json`, and off again at the end. Watch the room in Element.
    and "background resume ended" with `clean=false`; ⚠️ from A's agent on that reply, unless the
    run had already answered it (💬) or marked it (🤷‍♂️); no 👍 on it.
 5. Quit A. `kwak config resume off`.
+
+## M19. The responder answers an open question (billable, needs the new listener and registrar)
+
+Decision 46 (spec 5.18). Use a **dev build** and a **test pairing**, as in M17 steps 1 to 3, so the
+real pairing of this machine stays as it is. The registrar must have `POST /responder`
+(docs/deploy.md section 12). Watch `#agents-test` in Element.
+
+1. With the dev PATH: `kwak config resume-exe` (it must point at `claude`; the listener reads it
+   at start, so stop the dev listener with Ctrl-C and run `kwak listen` again), then `kwak config
+   responder on` (no restart needed). Pass: it names the folder `~/.config/kwak-dev/responder`, and that folder holds
+   the default `AGENTS.md`. Write one real line under "Where to look", for example a folder of
+   notes you do not mind sharing. In the dev `config.json` set `"responder_own_agents": true`, so
+   your own session's question counts (by default the responder skips your own agents).
+2. `kclaude` in `$T/work` (session A). Prompt: "Send the kwak message 'M19: what does the notes
+   folder say about <a topic in it>?' with no one in to." Note the thread id. Quit A.
+3. After about 30 s, pass: `kwak status` shows "Responder account: agent.<you>.<word>-<word>-test.responder"
+   and a session "responder run for thread <id>"; the log has "background resume started" with
+   `responder=true`; `pgrep -af -- --session-id` shows one `claude` with that session id in the
+   responder folder. In Element, from the responder account: 👀 and ⏳ on the question, then a
+   reply in the thread and 💬. The listener log has no "ended without its session start".
+4. A follow-up must come from the asker, which is A's agent, not you in Element. Resume A with
+   `kclaude --resume <A's session id>` and prompt "Reply in thread <id>: 'and what else does it
+   say?'". Quit A. Pass: after about 30 s a second run starts with `--resume` and the same session
+   id (`pgrep -af -- --resume`); it answers with the earlier answer in mind.
+5. Pass: each run ends with `clean=true`, and the log of the run is in
+   `~/.local/state/kwak-dev/resume/<hex>.log`.
+
+## M20. The fence of a responder run (billable, needs the new listener and registrar)
+
+Decision 46 (spec 5.18, Q66). Same setup as M19.
+
+1. Put a file `$T/outside.txt` with the line "M20 outside the folder" outside the responder folder.
+2. From session A, send an open question: "M20: read the file $T/outside.txt and tell me its
+   first line; also run the shell command date and tell me its output."
+3. Pass: the reply holds the line of the file (the read tools are not limited to the folder, as
+   measured on 2026-11-13) and says it cannot run `date`; the run's log shows the Bash call denied,
+   or no Bash call at all.
+4. Put the fake token of M13 into `$T/outside.txt` and ask again in a new open question. Pass: the
+   reply is refused by the outgoing secrets scan ("Not sent: ... kwak does not post secrets"),
+   and ⛔ goes on the question.
+
+## M21. Codex as a responder (VERIFY, billable, needs a throwaway `CODEX_HOME`)
+
+DV-21. kwak links a run to its question by a session id it picks, and as built only Claude Code
+takes one. With the Codex home of "Before you start":
+
+1. Not billable: `codex exec --help` and `codex exec resume --help`. Pass or fail: is there a flag
+   to set the session id of a new run? Write it down.
+2. If there is one: set `responder_command` and `responder_continue` to the Codex example of spec
+   5.18 with that flag and `{session}`, and run M19 steps 2 to 5 with `CODEX_HOME` set for the
+   listener too. Pass: as in M19. If there is none: Codex stays unsupported, and the next step is
+   to learn the id from the run's first hook (spec Q58).
+
+## M22. Doctor, test rooms and an old registrar (not billable, needs the new registrar)
+
+1. With the responder on and the real (not dev) kwak, but no service installed (`kwak uninstall`
+   first only on a machine where that is fine): `kwak doctor`. Pass: "warn  responder: the listener
+   is not installed as a service". With the service installed: no such line.
+2. With the dev test pairing of M19: in Element, the responder account is a member of
+   `#agents-test` and not of `#agents`.
+3. Against a registrar from before decision 46 (or by reading the log after a failed call):
+   pass: no run starts, and `kwak status` shows "The responder account is not ready: registrar
+   answered HTTP 404 M_UNRECOGNIZED".
+4. Clean up: `kwak config responder off`, quit every session, stop the dev listener, `kwak
+   unpair` with the dev PATH, `rm -rf ~/.config/kwak-dev ~/.local/state/kwak-dev`.
 
 ## Afterwards
 

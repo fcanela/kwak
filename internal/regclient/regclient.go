@@ -282,6 +282,14 @@ func (c *Client) ReportJoin(ctx context.Context, userID string) (string, error) 
 	return out.RoomID, err
 }
 
+// Responder mints a token for this pairing's responder account (POST /responder, decision 46),
+// making the account first when it does not exist. Each call logs the previous token out.
+func (c *Client) Responder(ctx context.Context) (wire.Agent, error) {
+	var out wire.Agent
+	err := c.authed(ctx, http.MethodPost, wire.PathResponder, wire.Empty{}, &out)
+	return out, err
+}
+
 // Unpair revokes this pairing (POST /unpair).
 func (c *Client) Unpair(ctx context.Context) error {
 	var out wire.Empty

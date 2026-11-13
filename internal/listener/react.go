@@ -75,7 +75,8 @@ func (l *Listener) reactOne(parent context.Context, r reaction) {
 	}
 	tok := l.tokens[l.agentOf(s, r.helper)]
 	usable := tok != "" && !s.AgentClosed
-	live := s.Ended == nil
+	// The responder account never closes with a run, so an ended responder record may mint it.
+	live := s.Ended == nil || s.Responder
 	room := l.roomID()
 	l.mu.Unlock()
 	ctx, cancel := context.WithTimeout(parent, reactWait)
@@ -146,12 +147,14 @@ func (l *Listener) shownLocked(s *session, helper string, items []render.Item) {
 	l.react(rs)
 }
 
-// rootedByLocked is the key of the session whose agent or helper started thread root, or "".
+// rootedByLocked is the key of the session whose agent or helper started thread root, or "". The
+// thread of a question a responder run answers counts as that run's own, so a follow-up it was
+// shown and did not answer gets 👍 at a clean end, like a reply in a session's own thread (5.18).
 func (l *Listener) rootedByLocked(root string) string {
 	if a := l.st.Roots[root]; a != "" {
 		return l.st.Mine[a].Session
 	}
-	return ""
+	return l.st.RespThreads[root].Session
 }
 
 // answered gives emoji (💬, or 🤷‍♂️ for a dont_know reply) on the messages of thread root printed

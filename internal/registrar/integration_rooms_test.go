@@ -134,6 +134,16 @@ func TestSideRoomsAgainstTuwunel(t *testing.T) {
 		t.Fatal("the test standing account must be in the test room only")
 	}
 
+	// The test pairing's responder account (decision 46) lives in the test room only.
+	var rs wire.Agent
+	if c := callAPI(t, api.URL, "POST", wire.PathResponder, cr.OwnerKey, struct{}{}, &rs); c != 200 ||
+		rs.UserID != "@agent.alice."+m[1]+"-test.responder:"+server || rs.RoomID != rooms["agents-test"] {
+		t.Fatalf("responder: %d %+v", c, rs)
+	}
+	if !slices.Contains(members(rooms["agents-test"]), rs.UserID) || slices.Contains(members(rooms["agents"]), rs.UserID) {
+		t.Fatal("the test responder must be in the test room only")
+	}
+
 	// A test agent lives in the test room only.
 	session := "5e3b0d2f-8c14-4e6b-9d1e-" + fmt.Sprintf("%012x", time.Now().UnixNano()&0xffffffffffff)
 	req := wire.AgentRequest{RequestID: strings.Repeat("c3", 16), Harness: wire.HarnessClaude, Session: session}

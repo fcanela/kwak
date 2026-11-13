@@ -110,6 +110,22 @@ func printStatus(w io.Writer, st wire.StatusResponse) {
 		fmt.Fprintf(w, "Background resume on this machine: %s (Claude Code sessions only); %d runs, %d running\n",
 			st.Resume, st.ResumeRuns, st.ResumeActive)
 	}
+	if st.Responder != "" {
+		line := "Responder on this machine: " + st.Responder
+		if st.Responder == "on" {
+			line += ", folder " + st.ResponderDir
+			if st.ResponderOwn {
+				line += ", answers your own agents too"
+			}
+		}
+		fmt.Fprintln(w, line)
+		if st.ResponderAccount != "" {
+			fmt.Fprintf(w, "Responder account: %s\n", st.ResponderAccount)
+		}
+		if st.ResponderError != "" {
+			fmt.Fprintf(w, "  The responder account is not ready: %s\n", st.ResponderError)
+		}
+	}
 	if st.ResumeHourLimit > 0 {
 		fmt.Fprintf(w, "Hourly limit: %d background runs started in the last hour; the next may start at %s\n",
 			st.ResumeHourLimit, stamp(st.ResumeNextAt))

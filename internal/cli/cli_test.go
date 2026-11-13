@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -566,6 +567,26 @@ func TestPairBadOwnerDefault(t *testing.T) {
 func TestRepair(t *testing.T) {
 	r := newRig(t)
 	r.paired()
+	// The responder and run limit keys of decision 46: a re-pair keeps them too.
+	before := r.config()
+	for k, v := range map[string]any{"responder": true, "responder_dir": "/opt/resp", "responder_prompt": "p",
+		"responder_command": []any{"/opt/x", "{session}"}, "responder_continue": []any{"/opt/x", "-r", "{session}"},
+		"responder_own_agents": true, "responder_timeout": "5m", "resume_timeout": "20m"} {
+		before[k] = v
+	}
+	data, _ := json.Marshal(before)
+	if err := os.WriteFile(filepath.Join(r.cfgDir, ConfigFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Every config.json key is either the pairing's own, which a re-pair writes, or a machine
+	// setting the fixture holds, so a new key cannot be dropped unseen.
+	pairing := []string{"version", "server", "server_name", "owner", "machine", "pairing_id", "room_id",
+		"standing_user", "keyring_user", "test"}
+	for _, k := range configKeys {
+		if _, ok := before[k]; !ok && !slices.Contains(pairing, k) {
+			t.Fatalf("the fixture has no %s", k)
+		}
+	}
 	code, out, errs := r.run(r.cli.Pair, "")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errs)
@@ -597,6 +618,11 @@ func TestRepair(t *testing.T) {
 	}
 	if on, _ := cfg["resume"].([]any); len(on) != 1 || on[0] != "replies" {
 		t.Errorf("resume lost: %v", cfg["resume"])
+	}
+	for k, v := range before {
+		if !slices.Contains(pairing, k) && !jsonSame(cfg[k], v) {
+			t.Errorf("re-pair changed %s: %v, was %v", k, cfg[k], v)
+		}
 	}
 }
 

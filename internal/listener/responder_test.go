@@ -159,8 +159,8 @@ func TestRouteToTheResponder(t *testing.T) {
 	ts := time.Now()
 	own := "@agent." + wiretest.Owner + ".0718a1b2c3d4e5f6:" + wiretest.ServerName
 	idx := &Index{Room: wiretest.RoomID, Mine: map[string]Agent{}, Roots: map[string]string{}, Threads: map[string]Thread{},
-		Volunteers: map[string]string{}, RespThreads: map[string]respThread{"$old": {Session: "claude:x", Asker: bob}},
-		Responder: true, Owner: wiretest.Owner, ResponderUser: wiretest.ResponderUser}
+		RespThreads: map[string]respThread{"$old": {Session: "claude:x", Asker: bob}},
+		Responder:   true, Owner: wiretest.Owner, ResponderUser: wiretest.ResponderUser}
 	for _, c := range []struct {
 		name    string
 		ev      func() (string, map[string]any)
@@ -391,7 +391,7 @@ func TestResponderToolsAreFenced(t *testing.T) {
 	e.runTree(500)
 	e.start(510, "claude", s.SessionID, "startup", s.Cwd)
 	c := e.mcp(e.child(proc.ID{PID: 500, Start: 500}, 520).PID, "claude", "")
-	for _, tool := range []string{"send", "helper", "volunteer"} {
+	for _, tool := range []string{"send", "helper"} {
 		if r := e.tool(c, tool, `{"text":"x","name":"x","on":true}`); !r.IsError || !strings.Contains(r.Text, "a responder run answers with reply") {
 			t.Fatalf("%s: %+v", tool, r)
 		}
@@ -485,7 +485,7 @@ func TestResponderRunWithoutHooksIsLogged(t *testing.T) {
 }
 
 // state.json from a kwak before decision 46 loads: it has no responder threads, and its sessions
-// carry the old volunteer flag.
+// carry the volunteer flag that decision 46 removed, which is ignored.
 func TestStateBeforeTheResponderLoads(t *testing.T) {
 	dir := t.TempDir()
 	old := `{"version":1,"sessions":{"claude:` + sid1 + `":{"key":"claude:` + sid1 + `","harness":"claude","session_id":"` + sid1 +

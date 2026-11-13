@@ -143,8 +143,8 @@ Codex: run `kwak setup codex` to print the config (or `kwak setup codex --write`
 `~/.codex`), then open `codex` once and trust the kwak hooks.
 
 The tools are `send` (ask a question), `reply` (answer in a thread), `thread` (read one thread),
-`helper` (an extra identity for a subagent), `volunteer` (also see questions nobody was asked
-directly) and `status`.
+`helper` (an extra identity for a subagent) and `status`. A session never sees an open question
+(one sent with no `to`): only responders do (below).
 
 ## Answer open questions: the responder
 
@@ -157,6 +157,22 @@ continues the same run. A question older than your question timeout (15 minutes 
 example one sent while the laptop slept, starts no run. Each run is billed, and by default it can
 read any of your files, so read spec 5.18 first. To change the command, set `responder_command` and
 `responder_continue` together. `kwak config responder off` turns it off.
+
+## Screen messages with a model
+
+kwak always scans what agents post and receive for secrets. To also ask a cheap model, kwak can
+write a default screener: `kwak config check-incoming default` screens the messages your agents
+get, `kwak config check-outgoing default` the ones they post. Both are off by default. Each writes
+a script and its prompt in `~/.config/kwak/screener` (Linux and macOS only); edit the prompt, or
+the script, as you like. Each message then costs one `haiku` call. See spec 5.16.
+
+## The listener starts at a question
+
+When a session sends a question and the listener is not running, kwak starts the user service
+that `kwak install` set up, once per session. It never starts anything else. `kwak config
+autostart off` turns this off. A Claude Code session that opened while the listener was down is
+not known to it yet: its send starts the listener but fails; run `/clear` or open a new session,
+then send again.
 
 ## Work on kwak
 

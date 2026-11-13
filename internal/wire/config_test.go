@@ -94,7 +94,7 @@ func TestMachineConfigResponderAndLimits(t *testing.T) {
 	}
 	out, _ := json.Marshal(old)
 	for _, k := range []string{"responder", "responder_dir", "responder_prompt", "responder_command", "responder_continue",
-		"responder_own_agents", "resume_timeout", "responder_timeout"} {
+		"responder_own_agents", "resume_timeout", "responder_timeout", "listener_autostart"} {
 		var m map[string]any
 		json.Unmarshal(out, &m)
 		if _, ok := m[k]; ok {
@@ -112,6 +112,16 @@ func TestMachineConfigResponderAndLimits(t *testing.T) {
 	for _, s := range []string{"", "soon", "-5m", "0s"} {
 		if RunTimeout(s) != 15*time.Minute {
 			t.Fatalf("RunTimeout(%q) = %v", s, RunTimeout(s))
+		}
+	}
+}
+
+// listener_autostart is on when missing (decision 46); only false turns it off.
+func TestMachineConfigAutostart(t *testing.T) {
+	for in, want := range map[string]bool{`{}`: true, `{"listener_autostart":true}`: true, `{"listener_autostart":false}`: false} {
+		var c MachineConfig
+		if err := json.Unmarshal([]byte(in), &c); err != nil || c.Autostart() != want {
+			t.Errorf("%s: %v %v", in, c.Autostart(), err)
 		}
 	}
 }

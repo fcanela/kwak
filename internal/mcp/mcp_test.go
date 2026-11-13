@@ -124,7 +124,7 @@ func TestDiscoverThenInitialize(t *testing.T) {
 	for _, tl := range list.Tools {
 		names = append(names, tl.Name)
 	}
-	if strings.Join(names, ",") != "send,reply,thread,helper,volunteer,status" {
+	if strings.Join(names, ",") != "send,reply,thread,helper,status" {
 		t.Fatalf("tools %v", names)
 	}
 }

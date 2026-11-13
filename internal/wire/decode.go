@@ -176,16 +176,15 @@ func ParseHookStdin(h Harness, event string, stdin []byte) (HookRequest, string,
 
 // MCP tool names, as the MCP server lists them and the tool op carries them.
 const (
-	ToolSend      = "send"
-	ToolReply     = "reply"
-	ToolThread    = "thread"
-	ToolHelper    = "helper"
-	ToolVolunteer = "volunteer"
-	ToolStatus    = "status"
+	ToolSend   = "send"
+	ToolReply  = "reply"
+	ToolThread = "thread"
+	ToolHelper = "helper"
+	ToolStatus = "status"
 )
 
 // Tools lists every MCP tool name.
-var Tools = []string{ToolSend, ToolReply, ToolThread, ToolHelper, ToolVolunteer, ToolStatus}
+var Tools = []string{ToolSend, ToolReply, ToolThread, ToolHelper, ToolStatus}
 
 // ToolPrefix is the prefix a harness puts before kwak's tool names.
 func ToolPrefix(h Harness) string {

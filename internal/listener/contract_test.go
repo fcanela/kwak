@@ -66,7 +66,6 @@ func (e *env) live(h wire.Harness, sid, cwd string, hp proc.ID, cands []proc.ID,
 		e.l.st.Mine[agent] = Agent{Session: key}
 		e.l.tokens[agent] = wiretest.AgentToken
 	}
-	e.l.reindexLocked()
 	return s
 }
 
@@ -173,7 +172,7 @@ func arrange(t *testing.T, e *env, c wiretest.IPCCase) wire.Harness {
 		e.claudeLive()
 		e.room.events[wiretest.Root1] = event(wiretest.Root1, mallory, at("2026-11-02T10:31:00Z"), text(qItem.Body, bob))
 		e.room.replies[wiretest.Root1] = []matrix.Event{event("$r1", bob, at("2026-11-02T10:40:00Z"), inThread(text("It draws from the parent court."), wiretest.Root1))}
-	case "tool helper", "tool volunteer":
+	case "tool helper", "tool volunteer is gone":
 		e.claudeLive()
 	case "tool call with an unknown field":
 		e.claudeLive()
@@ -200,7 +199,7 @@ func arrange(t *testing.T, e *env, c wiretest.IPCCase) wire.Harness {
 		cs := e.claudeLive(qItem, aItem)
 		e.addHelper(cs, "tests", wiretest.HelperAgent)
 		xs := e.codexLive()
-		xs.Started, xs.LastHook, xs.Volunteer = at("2026-11-02T09:30:00Z"), time.Time{}, true
+		xs.Started, xs.LastHook = at("2026-11-02T09:30:00Z"), time.Time{}
 		e.l.mu.Lock()
 		e.l.phase, e.l.lastSync, e.l.st.ResumeRuns = wire.StateSyncing, at("2026-11-02T10:41:00Z"), 1
 		e.l.st.Turns["$Qx1abc"] = &turns{N: 50}

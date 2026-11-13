@@ -55,6 +55,54 @@ func TestLinkMCPFirst(t *testing.T) {
 	}
 }
 
+// A Claude Code session that started while the listener was down stays unknown: a later prompt
+// hook and the MCP hello's env_session do not register it, so a send keeps failing. The error
+// says how to get out (Q74): start a new session or run /clear.
+func TestSessionStartedWhileListenerDown(t *testing.T) {
+	e := newEnv(t)
+	e.connect()
+	h := e.claudeTree(100)
+	e.child(h, 110)
+	c := e.mcp(e.child(h, 120).PID, "claude", sid1)
+	e.hook(110, hookReq("claude", wire.EventPrompt, sid1, cwd))
+	e.clk.instant = true
+	r := e.tool(c, "send", `{"text":"which port?"}`)
+	if !r.IsError || !strings.HasPrefix(r.Text, "kwak has not seen this session start yet") ||
+		!strings.Contains(r.Text, "not running when this session started") || !strings.Contains(r.Text, "/clear") {
+		t.Fatalf("send: %+v", r)
+	}
+	e.clk.instant = false
+	if e.session(k1) != nil {
+		t.Fatal("the session was registered without a SessionStart")
+	}
+	e.start(110, "claude", sid2, "clear", cwd)
+	if r := e.tool(c, "helper", `{"name":"t"}`); r.IsError || e.session(k2).Helpers["t"] == nil {
+		t.Fatalf("after /clear: %+v", r)
+	}
+}
+
+// A session the listener saw start is kept in state.json, so after a restart (as when a send
+// started the stopped service, spec 5.6) the same MCP server's send goes through.
+func TestKnownSessionSendsAfterRestart(t *testing.T) {
+	e := newEnv(t)
+	e.connect()
+	h := e.claudeTree(100)
+	e.child(h, 110)
+	mcpPID := e.child(h, 120).PID
+	e.mcp(mcpPID, "claude", sid1)
+	e.start(110, "claude", sid1, "startup", cwd)
+	e.waitAgent(k1)
+	e.l.save()
+	e.l.stop()
+
+	e.l = e.build(Config{ConfigPath: e.confPath})
+	e.connect()
+	c := e.mcp(mcpPID, "claude", sid1)
+	if r := e.tool(c, "send", `{"text":"which port?"}`); r.IsError {
+		t.Fatalf("send after the restart: %+v", r)
+	}
+}
+
 func TestToolWaitsForSessionStart(t *testing.T) {
 	e := newEnv(t)
 	e.connect()
@@ -62,7 +110,7 @@ func TestToolWaitsForSessionStart(t *testing.T) {
 	e.child(h, 110)
 	c := e.mcp(e.child(h, 120).PID, "claude", "")
 	got := make(chan wire.ToolResponse)
-	go func() { got <- e.tool(c, "volunteer", `{"on":true}`) }()
+	go func() { got <- e.tool(c, "status", `{}`) }()
 	eventually(t, "the tool to wait", func() bool { return e.clk.waiting() > 0 })
 	e.start(110, "claude", sid1, "startup", cwd)
 	if r := <-got; r.IsError {
@@ -82,8 +130,8 @@ func TestClearNewestSessionWins(t *testing.T) {
 	if s := e.session(k1); s.Ended == nil {
 		t.Fatal("/clear did not end the old session")
 	}
-	e.tool(c, "volunteer", `{"on":true}`)
-	if !e.session(k2).Volunteer || e.session(k1).Volunteer {
+	e.tool(c, "helper", `{"name":"t"}`)
+	if e.session(k2).Helpers["t"] == nil || e.session(k1).Helpers["t"] != nil {
 		t.Fatal("the tool call did not go to the newest session")
 	}
 }
@@ -100,12 +148,12 @@ func TestNestedHarnessesStayApart(t *testing.T) {
 	co := e.mcp(e.child(outer, 120).PID, "claude", "")
 	e.start(110, "claude", sid1, "startup", cwd)
 	e.start(310, "claude", sid2, "startup", cwd)
-	e.tool(ci, "volunteer", `{"on":true}`)
-	if !e.session(k2).Volunteer || e.session(k1).Volunteer {
+	e.tool(ci, "helper", `{"name":"inner"}`)
+	if e.session(k2).Helpers["inner"] == nil || e.session(k1).Helpers["inner"] != nil {
 		t.Fatal("inner MCP reached the outer session")
 	}
-	e.tool(co, "volunteer", `{"on":true}`)
-	if !e.session(k1).Volunteer {
+	e.tool(co, "helper", `{"name":"outer"}`)
+	if e.session(k1).Helpers["outer"] == nil {
 		t.Fatal("outer MCP did not reach its session")
 	}
 	uid := e.waitAgent(k1)
@@ -131,8 +179,8 @@ func TestCodexMetaRouting(t *testing.T) {
 	e.start(511, "codex", cx1, "startup", wiretest.CodexCwd)
 	e.clk.Advance(time.Minute)
 	e.start(521, "codex", cx2, "startup", wiretest.CodexCwd)
-	e.tool(c, "volunteer", `{"on":true}`, cx1)
-	if !e.session(sessionKey("codex", cx1)).Volunteer || e.session(sessionKey("codex", cx2)).Volunteer {
+	e.tool(c, "helper", `{"name":"t"}`, cx1)
+	if e.session(sessionKey("codex", cx1)).Helpers["t"] == nil || e.session(sessionKey("codex", cx2)).Helpers["t"] != nil {
 		t.Fatal("_meta.sessionId did not pick the session")
 	}
 }
@@ -143,7 +191,7 @@ func TestCodexToolBeforeAnyHook(t *testing.T) {
 	app := proc.ID{PID: 500, Start: 500}
 	e.procs.Add(app, proc.ID{})
 	c := e.mcp(e.child(app, 530).PID, "codex", "")
-	if r := e.tool(c, "volunteer", `{"on":true}`, cx1); r.IsError {
+	if r := e.tool(c, "status", `{}`, cx1); r.IsError {
 		t.Fatalf("untrusted hooks: %+v", r)
 	}
 	st := e.l.status(&client{pidOK: true})

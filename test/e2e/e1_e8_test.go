@@ -196,30 +196,25 @@ func e4(t *testing.T, w *World, a, b *FakeHarness, bID string) {
 		Rendered(bID, wire.HarnessCodex, w.Item(t, r1, render.Mention, ""), w.Item(t, r2, render.Mention, ""))))
 }
 
-// E5: an open question reaches nobody until B volunteers, then only B.
+// E5: an open question reaches no session (decision 46: only a responder answers those, and none
+// is on here), and the volunteer tool is gone.
 func e5(t *testing.T, w *World, a, b *FakeHarness, aID, bID string) {
-	q1 := ThreadOf(t, a.MustCall(t, wire.ToolSend, map[string]any{"text": "E5: does anyone know the room alias?"}))
+	ThreadOf(t, a.MustCall(t, wire.ToolSend, map[string]any{"text": "E5: does anyone know the room alias?"}))
 	s1 := ThreadOf(t, a.MustCall(t, wire.ToolSend, map[string]any{"text": "E5: marker for B", "to": []string{bID}}))
 	w.Bob.WaitInbox(t, b, 1)
 	out := b.Hook(t, wire.EventPrompt, nil)
-	SameJSON(t, "B's prompt before volunteering", out, ContextJSON("UserPromptSubmit",
+	SameJSON(t, "B's prompt (the open question is not in it)", out, ContextJSON("UserPromptSubmit",
 		Rendered(bID, wire.HarnessCodex, w.Item(t, s1, render.Mention, ""))))
-	_ = q1
-
-	if r := b.MustCall(t, wire.ToolVolunteer, map[string]any{"on": true}); !strings.HasPrefix(r, "You now volunteer") {
-		t.Fatalf("volunteer: %q", r)
+	if r := b.Call(t, "volunteer", map[string]any{"on": true}); !r.IsError || r.Text != "kwak has no tool named volunteer" {
+		t.Fatalf("volunteer: %+v", r)
 	}
-	q2 := ThreadOf(t, a.MustCall(t, wire.ToolSend, map[string]any{"text": "E5: anyone, which port is the API on?"}))
-	out = b.WaitHook(t, wire.EventPrompt, nil)
-	SameJSON(t, "B's prompt after volunteering", out, ContextJSON("UserPromptSubmit",
-		Rendered(bID, wire.HarnessCodex, w.Item(t, q2, render.OpenQuestion, ""))))
 
+	ThreadOf(t, b.MustCall(t, wire.ToolSend, map[string]any{"text": "E5: anyone, which port is the API on?"}))
 	s2 := ThreadOf(t, b.MustCall(t, wire.ToolSend, map[string]any{"text": "E5: marker for A", "to": []string{aID}}))
 	w.Alice.WaitInbox(t, a, 1)
 	out = a.Hook(t, wire.EventPrompt, nil)
-	SameJSON(t, "A's prompt (its own open questions never come back)", out, ContextJSON("UserPromptSubmit",
+	SameJSON(t, "A's prompt (B's open question is not in it)", out, ContextJSON("UserPromptSubmit",
 		Rendered(aID, wire.HarnessClaude, w.Item(t, s2, render.Mention, ""))))
-	b.MustCall(t, wire.ToolVolunteer, map[string]any{"on": false})
 }
 
 // E6: a helper bound to a Claude subagent gets only its own messages; SubagentStop hands leftovers

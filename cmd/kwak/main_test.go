@@ -120,6 +120,7 @@ func newRig(t *testing.T) *rig {
 			r.superv = append(r.superv, exe+" "+logPath)
 			return 0
 		},
+		Getenv: os.Getenv,
 		Listen: func(cfg cli.ListenConfig, d listener.Deps) cli.Main {
 			r.listened = append(r.listened, cfg)
 			r.deps = append(r.deps, d)

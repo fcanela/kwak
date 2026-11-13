@@ -69,7 +69,6 @@ type session struct {
 	AgentClosed bool               `json:"agent_closed,omitempty"`
 	NoAgent     string             `json:"no_agent,omitempty"` // a registrar refusal that is never retried
 	Helpers     map[string]*helper `json:"helpers"`
-	Volunteer   bool               `json:"volunteer"`
 	Started     time.Time          `json:"started"`
 	Ended       *time.Time         `json:"ended"`
 	LastHook    time.Time          `json:"last_hook,omitzero"`

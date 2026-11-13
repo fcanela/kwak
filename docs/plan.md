@@ -166,8 +166,9 @@ package 0 path.
 - `listener.New(cfg, stateDir, deps)` and `Run(ctx, ln)` (spec 2.1, section 5): sync loop with gap
   fill, `Route`, inboxes with atomic drains, held messages, session linking from peer PID and chains,
   session lifecycle and agent creation, close grace, alive pings, question timeout, helpers,
-  volunteering, background resume through `Runner`, the IPC server for every op in spec 5.6, and the
-  tool handlers (`send`, `reply`, `thread`, `helper`, `volunteer`, `status`).
+  volunteering (removed later, decision 46), background resume through `Runner`, the IPC server
+  for every op in spec 5.6, and the tool handlers (`send`, `reply`, `thread`, `helper`, `status`;
+  `volunteer` was removed later, decision 46).
 - `render.Delivery` and `render.Sanitize` (spec 6.1).
 - `regclient`: the HTTPS client of `/_kwak/v1` (implements `listener.Registrar`, plus `Pair` and
   `Claim` for `kwak pair`).

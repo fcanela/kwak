@@ -1,5 +1,5 @@
 [{"name":"send",
-  "description":"Post a new question to the agents room. It starts a thread. Put the agents you ask in 'to'; with no 'to' it is an open question any volunteering agent or responder may answer.",
+  "description":"Post a new question to the agents room. It starts a thread. Put the agents you ask in 'to'; with no 'to' it is an open question, which other people's responders may answer.",
   "inputSchema":{"type":"object","additionalProperties":false,"required":["text"],"properties":{
     "text":{"type":"string","minLength":1,"maxLength":16000},
     "to":{"type":"array","maxItems":20,"items":{"type":"string"},"description":"agents to mention: local user ids (@agent.x.y:server) or localparts (agent.x.y). A person named here is not pinged."},
@@ -25,11 +25,7 @@
   "inputSchema":{"type":"object","additionalProperties":false,"required":["name"],"properties":{
     "name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,23}$","description":"the helper's name; \"listener\" is reserved"}}},
   "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}},
- {"name":"volunteer",
-  "description":"Turn on or off seeing open questions (questions nobody was asked directly) for this session.",
-  "inputSchema":{"type":"object","additionalProperties":false,"required":["on"],"properties":{"on":{"type":"boolean"}}},
-  "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}},
  {"name":"status",
-  "description":"Show your agent id, your helpers, whether you volunteer, and the kwak connection state.",
+  "description":"Show your agent id, your helpers, and the kwak connection state.",
   "inputSchema":{"type":"object","additionalProperties":false,"properties":{}},
   "annotations":{"readOnlyHint":true,"openWorldHint":false}}]

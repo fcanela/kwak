@@ -413,8 +413,7 @@ type SessionStatus struct {
 	Cwd       string    `json:"cwd"`
 	Agent     string    `json:"agent,omitempty"`
 	Helpers   []string  `json:"helpers,omitempty"`
-	Volunteer bool      `json:"volunteer"` // a live session that volunteers; never an ended one
-	Tools     bool      `json:"tools"`     // an MCP connection is attached
+	Tools     bool      `json:"tools"` // an MCP connection is attached
 	Started   time.Time `json:"started"`
 	Ended     time.Time `json:"ended,omitzero"`
 	LastHook  time.Time `json:"last_hook,omitzero"`

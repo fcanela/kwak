@@ -24,9 +24,8 @@ func testIndex() *Index {
 			agB:  {Session: "claude:b"},
 			agAh: {Session: "claude:a", Helper: "tests"},
 		},
-		Roots:      map[string]string{"$rootA": agA, "$rootB": agB, "$rootH": agAh},
-		Threads:    map[string]Thread{},
-		Volunteers: map[string]string{},
+		Roots:   map[string]string{"$rootA": agA, "$rootB": agB, "$rootH": agAh},
+		Threads: map[string]Thread{},
 	}
 }
 
@@ -52,42 +51,34 @@ func TestRoute(t *testing.T) {
 	cases := []struct {
 		name string
 		ev   matrix.Event
-		vol  map[string]string
 		want []Delivery
 	}{
-		{"mention", event("$1", bob, ts, text("q", agA)), nil, []Delivery{d(agA, render.Mention)}},
-		{"notice mention", event("$1", bob, ts, notice), nil, []Delivery{d(agA, render.Mention)}},
-		{"reply in our thread, no mention", event("$2", bob, ts, inThread(text("a"), "$rootA")), nil, []Delivery{d(agA, render.YourThread)}},
-		{"both give one mention", event("$3", bob, ts, inThread(text("a", agA), "$rootA")), nil, []Delivery{d(agA, render.Mention)}},
-		{"reply in a foreign thread", event("$4", bob, ts, inThread(text("a"), "$foreign")), nil, nil},
-		{"A mentions B", event("$5", agA, ts, text("q", agB)), nil, []Delivery{d(agB, render.Mention)}},
-		{"B replies in A's thread", event("$6", agB, ts, inThread(text("a"), "$rootA")), nil, []Delivery{d(agA, render.YourThread)}},
-		{"helper mentions its parent", event("$7", agAh, ts, text("q", agA)), nil, []Delivery{d(agA, render.Mention)}},
-		{"parent replies in its helper's thread", event("$8", agA, ts, inThread(text("a"), "$rootH")), nil, []Delivery{d(agAh, render.YourThread)}},
-		{"own reply in own thread", event("$9", agA, ts, inThread(text("a"), "$rootA")), nil, nil},
-		{"self mention", event("$10", agA, ts, text("me", agA)), nil, nil},
-		{"open question, no volunteers", event("$11", bob, ts, text("anyone?")), nil, nil},
-		{"open question, volunteers", event("$12", bob, ts, text("anyone?")), map[string]string{"claude:a": agA, "claude:b": agB},
-			[]Delivery{d(agA, render.OpenQuestion), d(agB, render.OpenQuestion)}},
-		{"asking volunteer skips itself", event("$13", agA, ts, text("anyone?")), map[string]string{"claude:a": agA, "claude:b": agB},
-			[]Delivery{d(agB, render.OpenQuestion)}},
-		{"mentioned volunteer gets a mention", event("$14", bob, ts, text("you?", agB)), map[string]string{"claude:b": agB},
-			[]Delivery{d(agB, render.Mention)}},
-		{"edit dropped", event("$15", bob, ts, edit), nil, nil},
-		{"emote dropped", event("$16", bob, ts, emote), nil, nil},
-		{"body not a string", event("$17", bob, ts, badBody), nil, nil},
-		{"other room", other, nil, nil},
-		{"not a message", member, nil, nil},
-		{"@room is not a mention", event("$18", bob, ts, roomPing), nil, nil},
-		{"plain-text @name ignored", event("$19", bob, ts, text("hey @agent.fcanela.aaaaaaaaaaaaaaaa:kwak.test")), nil, nil},
-		{"mention of a foreign agent", event("$20", bob, ts, text("q", "@agent.zed.0000000000000000:kwak.test")), nil, nil},
+		{"mention", event("$1", bob, ts, text("q", agA)), []Delivery{d(agA, render.Mention)}},
+		{"notice mention", event("$1", bob, ts, notice), []Delivery{d(agA, render.Mention)}},
+		{"reply in our thread, no mention", event("$2", bob, ts, inThread(text("a"), "$rootA")), []Delivery{d(agA, render.YourThread)}},
+		{"both give one mention", event("$3", bob, ts, inThread(text("a", agA), "$rootA")), []Delivery{d(agA, render.Mention)}},
+		{"reply in a foreign thread", event("$4", bob, ts, inThread(text("a"), "$foreign")), nil},
+		{"A mentions B", event("$5", agA, ts, text("q", agB)), []Delivery{d(agB, render.Mention)}},
+		{"B replies in A's thread", event("$6", agB, ts, inThread(text("a"), "$rootA")), []Delivery{d(agA, render.YourThread)}},
+		{"helper mentions its parent", event("$7", agAh, ts, text("q", agA)), []Delivery{d(agA, render.Mention)}},
+		{"parent replies in its helper's thread", event("$8", agA, ts, inThread(text("a"), "$rootH")), []Delivery{d(agAh, render.YourThread)}},
+		{"own reply in own thread", event("$9", agA, ts, inThread(text("a"), "$rootA")), nil},
+		{"self mention", event("$10", agA, ts, text("me", agA)), nil},
+		// Decision 46: an open question reaches no session, only the responder (off here).
+		{"open question reaches no session", event("$11", bob, ts, text("anyone?")), nil},
+		{"own open question reaches no other session", event("$13", agA, ts, text("anyone?")), nil},
+		{"a mention in a root is not an open question", event("$14", bob, ts, text("you?", agB)), []Delivery{d(agB, render.Mention)}},
+		{"edit dropped", event("$15", bob, ts, edit), nil},
+		{"emote dropped", event("$16", bob, ts, emote), nil},
+		{"body not a string", event("$17", bob, ts, badBody), nil},
+		{"other room", other, nil},
+		{"not a message", member, nil},
+		{"@room is not a mention", event("$18", bob, ts, roomPing), nil},
+		{"plain-text @name ignored", event("$19", bob, ts, text("hey @agent.fcanela.aaaaaaaaaaaaaaaa:kwak.test")), nil},
+		{"mention of a foreign agent", event("$20", bob, ts, text("q", "@agent.zed.0000000000000000:kwak.test")), nil},
 	}
 	for _, c := range cases {
-		idx := testIndex()
-		if c.vol != nil {
-			idx.Volunteers = c.vol
-		}
-		got := Route(c.ev, idx)
+		got := Route(c.ev, testIndex())
 		if len(got) == 0 {
 			got = nil
 		}

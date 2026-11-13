@@ -25,6 +25,7 @@ const (
 	TextTimeout       = "the kwak listener did not answer in time; try again"
 	TextLost          = "the connection to the kwak listener closed during this call; try again"
 	TextTooLarge      = "this call is too large for the kwak listener (over 1 MiB)"
+	TextStarted       = "kwak started its listener, but it is not answering yet; send again in a moment. Details: kwak doctor"
 )
 
 // Timeouts of the IPC backend.
@@ -32,6 +33,10 @@ const (
 	DialTimeout  = 1 * time.Second
 	HelloTimeout = 3 * time.Second
 	CallTimeout  = 25 * time.Second // under Codex's tool_timeout_sec of 30
+	// StartWait is how long a send waits for a listener it just started to answer, and
+	// StartPoll how often it tries in that time. Both stay well under CallTimeout.
+	StartWait = 10 * time.Second
+	StartPoll = 500 * time.Millisecond
 )
 
 var errClosed = errors.New("mcp: listener connection closed")
@@ -43,11 +48,16 @@ type IPC struct {
 	Dial  func(ctx context.Context) (net.Conn, error)
 	Hello func() wire.MCPHello
 	Log   io.Writer // connection errors; nil discards
+	// Start starts the listener when a send finds it down (decision 46, spec 5.6), at most once
+	// per kwak mcp; an error says why it did not. nil never starts it. After is time.After when nil.
+	Start func() error
+	After func(time.Duration) <-chan time.Time
 
 	mu      sync.Mutex
 	conn    net.Conn
 	next    int64
 	pending map[int64]chan result
+	started bool // Start was tried
 }
 
 type result struct {
@@ -108,7 +118,11 @@ func (b *IPC) send(ctx context.Context, tool string, args json.RawMessage, m Met
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.conn == nil {
-		if text := b.connect(ctx); text != "" {
+		text := b.connect(ctx)
+		if text == TextNotRunning && tool == wire.ToolSend {
+			text = b.startLocked(ctx)
+		}
+		if text != "" {
 			return 0, nil, text
 		}
 	}
@@ -129,6 +143,37 @@ func (b *IPC) send(ctx context.Context, tool string, args json.RawMessage, m Met
 		return 0, nil, TextLost
 	}
 	return id, ch, ""
+}
+
+// startLocked starts the listener once, then waits up to StartWait for it to answer. It returns
+// the tool error text, or "" once connected. It holds b.mu.
+func (b *IPC) startLocked(ctx context.Context) string {
+	if b.Start == nil || b.started {
+		return TextNotRunning
+	}
+	b.started = true
+	if err := b.Start(); err != nil {
+		b.logf("did not start the listener: %v", err)
+		return TextNotRunning + ". kwak did not start it: " + err.Error()
+	}
+	b.logf("started the listener")
+	after := b.After
+	if after == nil {
+		after = time.After
+	}
+	deadline := after(StartWait)
+	for {
+		select {
+		case <-ctx.Done():
+			return TextStarted
+		case <-deadline:
+			return TextStarted
+		case <-after(StartPoll):
+		}
+		if text := b.connect(ctx); text != TextNotRunning {
+			return text
+		}
+	}
 }
 
 // connect dials and says hello. It holds b.mu.

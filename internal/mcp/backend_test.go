@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -181,7 +182,7 @@ func TestHelloFirstAndReconnect(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if text, _ := b.Call(ctx(t), "volunteer", json.RawMessage(`{"on":true}`), Meta{}); text != "ok volunteer" {
+	if text, _ := b.Call(ctx(t), "status", json.RawMessage(`{}`), Meta{}); text != "ok status" {
 		t.Fatalf("after reconnect: %q", text)
 	}
 	hellos, tools := fl.seen()
@@ -309,7 +310,7 @@ func TestMainHello(t *testing.T) {
 		in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}` + "\n"
 		var out, errOut bytes.Buffer
 		code := mainWith([]string{"--harness", c.harness}, strings.NewReader(in), &out, &errOut,
-			func(k string) string { return env[k] }, func() (string, error) { return fl.path, nil }, c.chain)
+			func(k string) string { return env[k] }, func() (string, error) { return fl.path, nil }, c.chain, nil)
 		if code != 0 || !strings.Contains(out.String(), `"text":"ok"`) {
 			t.Fatalf("%s: exit %d, out %q, err %q", c.harness, code, out.String(), errOut.String())
 		}
@@ -324,7 +325,7 @@ func TestMainUsage(t *testing.T) {
 	for _, args := range [][]string{nil, {"--harness", "vim"}, {"--harness"}, {"--harness", "claude", "x"}, {"--bogus"}} {
 		var errOut bytes.Buffer
 		code := mainWith(args, strings.NewReader(""), &bytes.Buffer{}, &errOut, os.Getenv,
-			func() (string, error) { return "", errors.New("unused") }, nil)
+			func() (string, error) { return "", errors.New("unused") }, nil, nil)
 		if code != 2 || errOut.Len() == 0 {
 			t.Errorf("%v: exit %d, stderr %q", args, code, errOut.String())
 		}
@@ -379,6 +380,13 @@ func TestMirrorIPC(t *testing.T) {
 				t.Errorf("%s: result %q %v, want %q %v", row.Name, r.Content[0].Text, r.IsError, wantText, wantErr)
 			}
 			_, tools := fl.seen()
+			if !slices.ContainsFunc(Tools(), func(x Tool) bool { return x.Name == want.Name }) {
+				// A tool this kwak mcp no longer offers (an older one may): it answers by itself.
+				if len(tools) != 0 {
+					t.Errorf("%s: a removed tool reached the listener", row.Name)
+				}
+				continue
+			}
 			if len(tools) != 1 {
 				t.Errorf("%s: %d tool lines", row.Name, len(tools))
 				continue
@@ -423,5 +431,70 @@ func TestMirrorIPC(t *testing.T) {
 	}
 	if rows < 19 {
 		t.Fatalf("only %d mcp rows", rows)
+	}
+}
+
+// A send that finds the listener down starts it once (decision 46), then waits for it to answer.
+// Other tools never start it.
+func TestSendStartsTheListener(t *testing.T) {
+	path := filepath.Join(shortDir(t), "s", "kwak.sock")
+	starts := 0
+	b := backend(path, claudeHello)
+	b.Start = func() error {
+		starts++
+		listen(t, &fakeListener{path: path, tool: func(req wire.ToolRequest, _ string) string { return okReply(req, "ok "+req.Name) }})
+		return nil
+	}
+	now := make(chan time.Time)
+	close(now)
+	b.After = func(d time.Duration) <-chan time.Time {
+		if d == StartPoll {
+			return now
+		}
+		return nil // StartWait never ends here
+	}
+	if text, isErr := b.Call(ctx(t), "status", json.RawMessage(`{}`), Meta{}); !isErr || text != TextNotRunning || starts != 0 {
+		t.Fatalf("status: %q %v, %d starts", text, isErr, starts)
+	}
+	if text, isErr := b.Call(ctx(t), "send", json.RawMessage(`{"text":"hi"}`), Meta{}); isErr || text != "ok send" || starts != 1 {
+		t.Fatalf("send: %q %v, %d starts", text, isErr, starts)
+	}
+	b.Close()
+}
+
+// A start that is refused says why, and kwak mcp does not try again; a started listener that does
+// not answer in time gives its own text.
+func TestSendStartRefusedOrSlow(t *testing.T) {
+	path := filepath.Join(shortDir(t), "none", "kwak.sock")
+	starts := 0
+	b := backend(path, claudeHello)
+	b.Start = func() error { starts++; return errors.New("it is not installed as a user service; run kwak install") }
+	send := func() string {
+		text, _ := b.Call(ctx(t), "send", json.RawMessage(`{"text":"hi"}`), Meta{})
+		return text
+	}
+	if got := send(); got != TextNotRunning+". kwak did not start it: it is not installed as a user service; run kwak install" {
+		t.Fatalf("refused: %q", got)
+	}
+	if got := send(); got != TextNotRunning || starts != 1 {
+		t.Fatalf("second send: %q, %d starts", got, starts)
+	}
+
+	slow := backend(path, claudeHello)
+	slow.Start = func() error { return nil }
+	polls, deadline := 0, make(chan time.Time)
+	now := make(chan time.Time)
+	close(now)
+	slow.After = func(d time.Duration) <-chan time.Time {
+		if d != StartPoll {
+			return deadline
+		}
+		if polls++; polls == 3 {
+			close(deadline)
+		}
+		return now
+	}
+	if text, isErr := slow.Call(ctx(t), "send", json.RawMessage(`{"text":"hi"}`), Meta{}); !isErr || text != TextStarted {
+		t.Fatalf("slow: %q %v", text, isErr)
 	}
 }

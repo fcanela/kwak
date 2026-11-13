@@ -23,11 +23,10 @@ type Thread struct {
 
 // Index is what Route reads and records (spec 5.4).
 type Index struct {
-	Room       string
-	Mine       map[string]Agent  // user id -> owner, every agent this listener created
-	Roots      map[string]string // event id -> agent, for thread roots sent by Mine
-	Threads    map[string]Thread // root -> latest event
-	Volunteers map[string]string // session key -> its agent's user id
+	Room    string
+	Mine    map[string]Agent  // user id -> owner, every agent this listener created
+	Roots   map[string]string // event id -> agent, for thread roots sent by Mine
+	Threads map[string]Thread // root -> latest event
 	// The responder (decision 46): on or off, as config.json says before each batch, this
 	// machine's owner, whether the owner's own agents are answered, the responder account (""
 	// until minted) and the threads its runs answer.
@@ -43,7 +42,7 @@ type Index struct {
 
 func newIndex(st *state, room string) *Index {
 	return &Index{Room: room, Mine: st.Mine, Roots: st.Roots, Threads: st.Threads,
-		Volunteers: map[string]string{}, RespThreads: st.RespThreads, fetched: map[string]bool{}}
+		RespThreads: st.RespThreads, fetched: map[string]bool{}}
 }
 
 // Delivery is one message for one local agent. A delivery to the responder (decision 46) has
@@ -162,9 +161,6 @@ func Route(ev matrix.Event, idx *Index) []Delivery {
 			idx.Missing = append(idx.Missing, c.relEvent)
 		}
 	case !c.hasRel && len(c.mentions) == 0:
-		for _, a := range idx.Volunteers {
-			add(a, render.OpenQuestion)
-		}
 		if idx.Responder && idx.asksResponder(ev.Sender) {
 			resp = &Delivery{UserID: idx.ResponderUser, Session: idx.RespThreads[ev.EventID].Session,
 				Reason: render.OpenQuestion, Responder: true}

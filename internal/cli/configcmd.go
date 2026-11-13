@@ -16,10 +16,11 @@ import (
 )
 
 const configUsage = "usage: kwak config resume [off|<triggers>] | resume-exe [--harness claude|codex] [path] | " +
-	"resume-per-hour <n> | check-outgoing <path|off> | check-incoming <path|off> | responder [on|off]"
+	"resume-per-hour <n> | check-outgoing <path|default|off> | check-incoming <path|default|off> | responder [on|off] | autostart [on|off]"
 
 // Config is kwak config resume [off|<triggers>] | resume-exe [--harness claude|codex] [path] |
-// resume-per-hour <n> | check-outgoing <path|off> | check-incoming <path|off> | responder [on|off].
+// resume-per-hour <n> | check-outgoing <path|default|off> | check-incoming <path|default|off> |
+// responder [on|off] | autostart [on|off].
 func (c *CLI) Config(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, configUsage)
@@ -36,6 +37,8 @@ func (c *CLI) Config(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 		return c.configCheck(args[0], args[1:], stdout, stderr)
 	case "responder":
 		return c.configResponder(args[1:], stdout, stderr)
+	case "autostart":
+		return c.configAutostart(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "kwak config: unknown setting %q\n", args[0])
 	return 2
@@ -213,10 +216,10 @@ func (c *CLI) configResumePerHour(args []string, stdout, stderr io.Writer) int {
 
 // configCheck records the outgoing or the incoming check command (spec 5.16), or turns it off.
 // The path must be absolute: a check is a guard, so kwak never resolves it against a directory or
-// PATH.
+// PATH. default writes kwak's default screener (decision 46) and records it.
 func (c *CLI) configCheck(which string, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		fmt.Fprintf(stderr, "usage: kwak config %s <path|off>\n", which)
+		fmt.Fprintf(stderr, "usage: kwak config %s <path|default|off>\n", which)
 		return 2
 	}
 	dir, err := c.env.ConfigDir()
@@ -228,7 +231,15 @@ func (c *CLI) configCheck(which string, args []string, stdout, stderr io.Writer)
 		return fail(stderr, "%v", err)
 	}
 	p := args[0]
-	if p != "off" {
+	slot, what := &cfg.CheckOutgoing, "outgoing"
+	if which == "check-incoming" {
+		slot, what = &cfg.CheckIncoming, "incoming"
+	}
+	if p == "default" {
+		if p, err = writeScreener(dir, what, cfg.ResumeExe[wire.HarnessClaude], runtime.GOOS == "windows"); err != nil {
+			return fail(stderr, "%v", err)
+		}
+	} else if p != "off" {
 		if !filepath.IsAbs(p) {
 			return fail(stderr, "%s is not an absolute path. Give the full path of the check command, or off", p)
 		}
@@ -239,10 +250,6 @@ func (c *CLI) configCheck(which string, args []string, stdout, stderr io.Writer)
 		if err != nil {
 			return fail(stderr, "%s: %v", p, err)
 		}
-	}
-	slot, what := &cfg.CheckOutgoing, "outgoing"
-	if which == "check-incoming" {
-		slot, what = &cfg.CheckIncoming, "incoming"
 	}
 	const reader = "The listener reads it for each message, so no restart is needed."
 	if p == "off" {
@@ -258,6 +265,15 @@ func (c *CLI) configCheck(which string, args []string, stdout, stderr io.Writer)
 		return 0
 	}
 	fmt.Fprintf(stdout, "Recorded %s as the %s check command. %s\n", p, what, reader)
+	if args[0] == "default" {
+		wait := "10 s"
+		if what == "incoming" {
+			wait = "30 s"
+		}
+		fmt.Fprintf(stdout, "It is kwak's default screener: one haiku call per message. Edit its prompt in %s.\n"+
+			"A call that is slow (over %s) or fails stops the message. The script keeps the claude path it was "+
+			"written with; delete it to have kwak write it again.\n", filepath.Join(filepath.Dir(p), what+".md"), wait)
+	}
 	return 0
 }
 
@@ -311,6 +327,44 @@ func (c *CLI) configResponder(args []string, stdout, stderr io.Writer) int {
 
 const responderHelp = "on: answer open questions from other people's agents, one run per question, in the responder folder.\n" +
 	"off: never (the default). The command, prompt, folder and limits are keys in config.json (see the docs)."
+
+const autostartUsage = "usage: kwak config autostart [on|off]"
+
+// configAutostart shows or sets whether a session's send may start the listener's user service
+// when the listener is down (decision 46). On by default.
+func (c *CLI) configAutostart(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 1 || len(args) == 1 && args[0] != "on" && args[0] != "off" {
+		fmt.Fprintln(stderr, autostartUsage)
+		return 2
+	}
+	dir, err := c.env.ConfigDir()
+	if err != nil {
+		return fail(stderr, "%v", err)
+	}
+	cfg, err := loadConfig(dir, c.env.InsecureHTTPForTests)
+	if err != nil {
+		return fail(stderr, "%v", err)
+	}
+	if len(args) == 0 {
+		state := "off"
+		if cfg.Autostart() {
+			state = "on"
+		}
+		fmt.Fprintf(stdout, "Listener autostart on this machine: %s.\n\n%s\n%s\n", state, autostartHelp, autostartUsage)
+		return 0
+	}
+	on := args[0] == "on"
+	cfg.ListenerAutostart = &on
+	if err := cfg.Save(dir); err != nil {
+		return fail(stderr, "could not write %s: %v", ConfigFile, err)
+	}
+	fmt.Fprintf(stdout, "Listener autostart on this machine is now %s.\n", args[0])
+	return 0
+}
+
+const autostartHelp = "on (the default): when a session sends a question and the listener is down, kwak starts the\n" +
+	"listener's user service, once per session. It never starts a listener that kwak install did not set up.\n" +
+	"off: never; start the listener yourself."
 
 // runnable reports whether fi at path p can be started: an exec bit, or on Windows (no exec bit)
 // an extension Windows runs.

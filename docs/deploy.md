@@ -900,3 +900,12 @@ route. So the order matters only for when the first answer comes, not for safety
   `config.json` and keeps them. In `state.json` it reads each responder record as an ended Claude
   Code session in the responder folder; it routes nothing to them, so they wait untouched until
   they are pruned 90 days later.
+
+### Decision 46, part 2: machines only
+
+Part 2 of decision 46 (no more `volunteer`, the listener started at a `send`, the default
+screener) changes nothing on the server: no registrar image, no `config.json` or `state.json` key
+there, no tuwunel, nginx or firewall change. Update `kwak` on the machines in any order. An older
+`kwak` ignores the new machine key `listener_autostart`, and runs the default screener like any
+check command, since it is only a path in `check_incoming` or `check_outgoing`. After going back
+to an older `kwak`, `volunteer` is offered again and is off in every session.

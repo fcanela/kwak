@@ -81,7 +81,10 @@ make dev            # builds bin/kwak
 - keeps its owner key in its own keyring item (each pairing has its own item, spec 5.2), so it
   never reads or overwrites your real key;
 - refuses `kwak install`, `kwak uninstall` and bare `kwak setup`: it never touches the user service
-  of your real listener. You run the dev listener in a terminal instead (below);
+  of your real listener. You run the dev listener in a terminal instead (below). For the same
+  reason a session's `send` never starts a listener while the dev listener is down (a release
+  kwak starts its installed service then, spec 5.6): it says "a dev build never starts the user
+  service; run kwak listen in a terminal";
 - refuses `kwak setup codex --write` and `--remove` unless `CODEX_HOME` is set, so it never edits
   your real `~/.codex`;
 - says so in `kwak version`, `kwak status` and `kwak doctor`.
@@ -237,7 +240,8 @@ Things that would touch a real setup, and how this guide avoids them:
   responder (`kwak config responder on`): a dev build's responder folder is
   `~/.config/kwak-dev/responder`, its runs are real, billed `claude` runs, and with a test pairing
   its account is only in `#agents-test`. Leave it off unless you test it (manual checks M19 to
-  M22).
+  M22). The default screener (`kwak config check-incoming default`, spec 5.16) is the same: its
+  folder is `~/.config/kwak-dev/screener`, and each check is a billed `haiku` run (M23).
 - The registrar and the Matrix server are shared. Changes there are deployed by the maintainer
   (`docs/deploy.md`). Ask the maintainer.
 
@@ -246,7 +250,8 @@ Things that would touch a real setup, and how this guide avoids them:
 [docs/manual-checks.md](manual-checks.md) has the checks that need a real Claude Code or Codex
 (spec 10.6). Most of them are **billed model runs**: each check says "billable" or "not billable".
 Run them only with the maintainer's go-ahead. M17 runs a test pairing with a dev build, step by
-step, and M19 to M22 the responder in the same way.
+step, M19 to M22 the responder in the same way, M23 the default screener and M24 the listener
+started at a `send`.
 
 ## Clean up
 

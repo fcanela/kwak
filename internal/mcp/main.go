@@ -23,16 +23,16 @@ const EnvClaudeSession = "CLAUDE_CODE_SESSION_ID"
 type MainFunc func(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 
 // NewMain returns `kwak mcp --harness <claude|codex>`. procs is read only on Windows, for the
-// chain the client sends.
-func NewMain(procs proc.Reader) MainFunc {
+// chain the client sends. start starts the listener at a send that finds it down (IPC.Start).
+func NewMain(procs proc.Reader, start func() error) MainFunc {
 	chain := proc.ClientChain(runtime.GOOS, procs)
 	return func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-		return mainWith(args, stdin, stdout, stderr, os.Getenv, paths.SocketPath, chain)
+		return mainWith(args, stdin, stdout, stderr, os.Getenv, paths.SocketPath, chain, start)
 	}
 }
 
 func mainWith(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string,
-	socket func() (string, error), chain func() []proc.ID) int {
+	socket func() (string, error), chain func() []proc.ID, start func() error) int {
 	fs := flag.NewFlagSet("kwak mcp", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	harness := fs.String("harness", "", "claude or codex")
@@ -62,7 +62,8 @@ func mainWith(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv f
 			}
 			return hello
 		},
-		Log: stderr,
+		Log:   stderr,
+		Start: start,
 	}
 	defer b.Close()
 	if err := Serve(context.Background(), stdin, stdout, Tools(), b); err != nil {

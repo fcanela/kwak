@@ -70,7 +70,14 @@ type MachineConfig struct {
 	// durations such as "15m". Missing, bad or not positive is DefaultRunTimeout.
 	ResumeTimeout    string `json:"resume_timeout,omitempty"`
 	ResponderTimeout string `json:"responder_timeout,omitempty"`
+	// ListenerAutostart false stops kwak mcp from starting the listener's user service when a
+	// session sends a question while the listener is down (decision 46). Missing is on. Only kwak
+	// config autostart writes it.
+	ListenerAutostart *bool `json:"listener_autostart,omitempty"`
 }
+
+// Autostart reports whether kwak mcp may start the listener's user service (listener_autostart).
+func (c MachineConfig) Autostart() bool { return c.ListenerAutostart == nil || *c.ListenerAutostart }
 
 // DefaultRunTimeout limits one background or responder run (decision 46: "Lets set both to 15").
 const DefaultRunTimeout = 15 * time.Minute

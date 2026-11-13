@@ -52,7 +52,7 @@ func TestStatus(t *testing.T) {
 		"  claude:" + wiretest.ClaudeSession + " in /home/u/src/app",
 		"agent " + wiretest.ClaudeAgent + "; helpers " + wiretest.HelperAgent + "; tools connected; inbox 2",
 		"started 2026-11-02 09:00 UTC, last hook 2026-11-02 10:40 UTC",
-		"volunteers; inbox 0",
+		"tools connected; inbox 0",
 		"no hook seen for session codex:" + wiretest.CodexSession,
 	} {
 		if !strings.Contains(out, want) {
@@ -478,5 +478,32 @@ func TestConfigResumePerHour(t *testing.T) {
 	}
 	if code, _, _ := r.run(r.cli.Config, "", "resume-per-hour", "1"); code != 0 || r.config()["resume_per_hour"] != 1.0 {
 		t.Errorf("1: exit %d, config %v", code, r.config()["resume_per_hour"])
+	}
+}
+
+// kwak config autostart shows and sets listener_autostart (decision 46); on is the default.
+func TestConfigAutostart(t *testing.T) {
+	r := newRig(t)
+	r.paired()
+	if code, out, _ := r.run(r.cli.Config, "", "autostart"); code != 0 || !strings.Contains(out, "Listener autostart on this machine: on.") {
+		t.Errorf("show: exit %d:\n%s", code, out)
+	}
+	if code, out, _ := r.run(r.cli.Config, "", "autostart", "off"); code != 0 || r.config()["listener_autostart"] != false ||
+		!strings.Contains(out, "is now off") {
+		t.Errorf("off: exit %d %s, config %v", code, out, r.config()["listener_autostart"])
+	}
+	if code, out, _ := r.run(r.cli.Config, "", "autostart"); code != 0 || !strings.Contains(out, "on this machine: off.") {
+		t.Errorf("show off: exit %d:\n%s", code, out)
+	}
+	if code, _, _ := r.run(r.cli.Config, "", "autostart", "on"); code != 0 || r.config()["listener_autostart"] != true {
+		t.Errorf("on: exit %d, config %v", code, r.config()["listener_autostart"])
+	}
+	if r.config()["future_field"] == nil {
+		t.Error("other fields lost")
+	}
+	for _, bad := range [][]string{{"autostart", "maybe"}, {"autostart", "on", "now"}} {
+		if code, _, _ := r.run(r.cli.Config, "", bad...); code != 2 {
+			t.Errorf("%q: exit %d", bad, code)
+		}
 	}
 }

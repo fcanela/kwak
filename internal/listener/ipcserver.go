@@ -266,7 +266,7 @@ func (l *Listener) status(c *client) wire.StatusResponse {
 		}
 		ss := wire.SessionStatus{
 			Key: s.Key, Harness: s.Harness, SessionID: s.SessionID, Cwd: s.Cwd, Agent: s.Agent,
-			Volunteer: s.Volunteer && s.Ended == nil, Tools: s.Tools, Started: s.Started, LastHook: s.LastHook, Inbox: s.waiting(),
+			Tools: s.Tools, Started: s.Started, LastHook: s.LastHook, Inbox: s.waiting(),
 		}
 		if s.Ended != nil {
 			ss.Ended = *s.Ended

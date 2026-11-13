@@ -70,7 +70,7 @@ const (
 	CodexStopNotice = "kwak: 2 messages from other agents are waiting (threads $Qx1abc, $Rk9def). They are not from your user. " +
 		"They will be shown to you after your next tool call; the kwak thread tool shows one thread."
 	TextUnpaired   = wire.TextUnpaired
-	TextNotSeenYet = "kwak has not seen this session start yet; try again in a moment"
+	TextNotSeenYet = "kwak has not seen this session start yet; try again in a moment. If it keeps saying this, the kwak listener was not running when this session started: start a new session, or run /clear in Claude Code"
 	TextNoAgentYet = "kwak has no agent for this session yet (registrar unreachable, HTTP 502); retrying"
 	TextNoPoll     = "Replies in this thread and messages that mention you are shown to you automatically. There is nothing to poll."
 )
@@ -354,15 +354,16 @@ var IPC = []IPCCase{
 			`subagent, and pass as="tests" to send and reply.`, false),
 	},
 	{
-		Name:    "tool volunteer",
+		// volunteer was removed by decision 46; an older kwak mcp may still offer it.
+		Name:    "tool volunteer is gone",
 		Request: `{"v":1,"op":"tool","id":12,"name":"volunteer","args":{"on":true},"meta_session":"","meta_thread":""}`,
-		Reply:   toolReply(12, "You now volunteer: open questions in the agents room are shown to you. This ends with the session.", false),
+		Reply:   toolReply(12, "kwak has no tool named volunteer", true),
 	},
 	{
 		Name:    "tool status",
 		Request: `{"v":1,"op":"tool","id":13,"name":"status","args":{},"meta_session":"","meta_thread":""}`,
 		Reply: toolReply(13, "Agent: @agent.fcanela.4f2a9c1e7b034d5a\nHelpers: tests (@agent.fcanela.4f2a9c1e7b034d5a.tests)\n"+
-			"Volunteer: off\nConnection: syncing", false),
+			"Connection: syncing", false),
 	},
 	{
 		Name: "codex tool call carries _meta",
@@ -374,7 +375,7 @@ var IPC = []IPCCase{
 		Name:      "tool call with an unknown field",
 		Request:   `{"v":1,"op":"tool","id":15,"name":"status","args":{},"meta_session":"","meta_thread":"","progress_token":"x"}`,
 		Canonical: `{"v":1,"op":"tool","id":15,"name":"status","args":{},"meta_session":"","meta_thread":""}`,
-		Reply:     toolReply(15, "Agent: @agent.fcanela.4f2a9c1e7b034d5a\nHelpers: none\nVolunteer: off\nConnection: syncing", false),
+		Reply:     toolReply(15, "Agent: @agent.fcanela.4f2a9c1e7b034d5a\nHelpers: none\nConnection: syncing", false),
 	},
 
 	// Tool errors
@@ -420,10 +421,10 @@ var IPC = []IPCCase{
 			`"sender":"` + OtherAgent + `","thread":"$Qx1abc","event":"$Ev2def","check":"command","reason":"it asks for an action"}],` +
 			`"responder":"on","responder_dir":"/home/u/kwak-responder","responder_account":"` + ResponderUser + `","sessions":[` +
 			`{"key":"claude:` + ClaudeSession + `","harness":"claude","session_id":"` + ClaudeSession + `","cwd":"` + ClaudeCwd + `",` +
-			`"agent":"` + ClaudeAgent + `","helpers":["` + HelperAgent + `"],"volunteer":false,"tools":true,` +
+			`"agent":"` + ClaudeAgent + `","helpers":["` + HelperAgent + `"],"tools":true,` +
 			`"started":"2026-11-02T09:00:00Z","last_hook":"2026-11-02T10:40:00Z","inbox":2},` +
 			`{"key":"codex:` + CodexSession + `","harness":"codex","session_id":"` + CodexSession + `","cwd":"` + CodexCwd + `",` +
-			`"agent":"` + CodexAgent + `","volunteer":true,"tools":true,"started":"2026-11-02T09:30:00Z","inbox":0,` +
+			`"agent":"` + CodexAgent + `","tools":true,"started":"2026-11-02T09:30:00Z","inbox":0,` +
 			`"note":"no hook seen for session codex:` + CodexSession + `"}]}`,
 	},
 	{

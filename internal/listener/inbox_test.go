@@ -474,9 +474,11 @@ func TestSendNeverPingsPersons(t *testing.T) {
 		t.Fatalf("question kinds: asked %v, open %v", asked, open)
 	}
 	// On the receiving side, a message that mentions nobody is an open question (Route, 5.4).
+	// Since decision 46 only a responder gets one.
 	idx := &Index{Room: wiretest.RoomID, Mine: map[string]Agent{bob: {Session: "s"}}, Roots: map[string]string{},
-		Threads: map[string]Thread{}, Volunteers: map[string]string{"s": bob}}
-	if ds := Route(event("$person", wiretest.ClaudeAgent, e.clk.Now(), m), idx); len(ds) != 1 || ds[0].Reason != render.OpenQuestion {
+		Threads: map[string]Thread{}, Responder: true, Owner: "bob", RespThreads: map[string]respThread{}}
+	if ds := Route(event("$person", wiretest.ClaudeAgent, e.clk.Now(), m), idx); len(ds) != 1 || !ds[0].Responder ||
+		ds[0].Reason != render.OpenQuestion {
 		t.Fatalf("routed as %+v", ds)
 	}
 }
@@ -696,31 +698,20 @@ func TestCodexHelperBoundToThreadID(t *testing.T) {
 	}
 }
 
-func TestVolunteerOpenQuestions(t *testing.T) {
+// Decision 46 removed volunteer: an open question never reaches a session, live or ended, and the
+// tool is gone, so an older kwak mcp that still offers it gets an error.
+func TestOpenQuestionsReachNoSession(t *testing.T) {
 	e := newEnv(t)
 	e.connect()
 	e.claudeSession(100, sid1, cwd)
 	c := e.mcp(e.child(proc.ID{PID: 100, Start: 100}, 120).PID, "claude", "")
 	e.deliver(event("$o1", bob, e.clk.Now(), text("anyone?")))
-	if len(e.items(k1)) != 0 {
-		t.Fatal("open question without volunteering")
+	if r := e.tool(c, "volunteer", `{"on":true}`); !r.IsError || r.Text != "kwak has no tool named volunteer" {
+		t.Fatalf("volunteer: %+v", r)
 	}
-	e.tool(c, "volunteer", `{"on":true}`)
 	e.deliver(event("$o2", bob, e.clk.Now(), text("anyone?")))
-	if got := e.items(k1); len(got) != 1 || got[0].Reason != render.OpenQuestion {
-		t.Fatalf("%+v", got)
-	}
-	e.hook(110, hookReq("claude", wire.EventSessionEnd, sid1, cwd))
-	e.deliver(event("$o3", bob, e.clk.Now(), text("anyone?")))
-	if len(e.items(k1)) != 1 {
-		t.Fatal("an ended session still volunteers")
-	}
-	st := e.l.status(&client{pidOK: true})
-	if len(st.Sessions) != 1 || st.Sessions[0].Volunteer {
-		t.Fatalf("kwak status shows an ended session as a volunteer: %+v", st.Sessions)
-	}
-	if !e.session(k1).Volunteer {
-		t.Fatal("the setting must survive for a resume (spec 5.12)")
+	if got := e.items(k1); len(got) != 0 {
+		t.Fatalf("a session got open questions: %+v", got)
 	}
 }
 

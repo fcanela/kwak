@@ -20,7 +20,9 @@ on small interfaces it declares itself.
 4. `internal/hook`: `kwak hook`. Reads the harness's JSON on stdin, asks the listener over the
    socket, prints what the harness expects.
 5. `internal/mcp`: `kwak mcp`. A small JSON-RPC 2.0 server on stdio. It forwards tool calls to the
-   listener over the socket.
+   listener over the socket. When a `send` finds the listener down, it calls a start function that
+   `cmd/kwak/autostart.go` gives it: that starts the installed user service through
+   `internal/service`, once per `kwak mcp` (spec 5.6).
 6. `internal/render`: turns other agents' messages into framed text for a model. Pure.
    `internal/check` next to it (added 2026-11-12): the secrets scan, regular expressions only, and
    the runner of the optional check commands. It starts a process only for a path the owner set

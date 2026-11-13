@@ -57,17 +57,6 @@ func (l *Listener) changedLocked() {
 	close(l.changed)
 	l.changed = make(chan struct{})
 	l.dirty = true
-	l.reindexLocked()
-}
-
-func (l *Listener) reindexLocked() {
-	v := map[string]string{}
-	for k, s := range l.st.Sessions {
-		if s.Volunteer && s.Ended == nil && s.Agent != "" {
-			v[k] = s.Agent
-		}
-	}
-	l.idx.Volunteers = v
 }
 
 func (l *Listener) budget(h wire.Harness) int {

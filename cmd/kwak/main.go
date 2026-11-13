@@ -41,8 +41,8 @@ type Main func(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 const keyringDeadline = 10 * time.Second
 
 // sys is the outside world the commands are built from. Each field is called only by the
-// commands that need it, so kwak hook and kwak mcp never build a keyring, a service or an
-// HTTP client (I2).
+// commands that need it, so kwak hook and kwak mcp never build a keyring or an HTTP client (I2).
+// kwak mcp builds the service only to start the listener at a send that finds it down.
 type sys struct {
 	Keyring    func() secrets.Secrets
 	Preflight  func() error
@@ -57,6 +57,8 @@ type sys struct {
 	Detach     func(exe string) error
 	Supervise  func(ctx context.Context, exe, logPath string) int
 	Listen     func(cli.ListenConfig, listener.Deps) cli.Main
+	// Getenv is what kwak mcp's start of the listener reads the KWAK_* overrides with.
+	Getenv func(string) string
 	// Dev is a dev build (make dev, paths.Dev): its own folders, no user service, a note in
 	// kwak version and kwak status (decision 40).
 	Dev bool
@@ -80,6 +82,7 @@ func realSys() sys {
 		Detach:     service.Detach,
 		Supervise:  service.Supervise,
 		Listen:     cli.Listen,
+		Getenv:     os.Getenv,
 		Dev:        paths.Dev(),
 	}
 }
@@ -148,7 +151,7 @@ func commands(s sys) map[string]Main {
 			return hook.NewMain(s.Procs())(args, stdin, stdout, stderr)
 		},
 		"mcp": func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-			return mcp.NewMain(s.Procs())(args, stdin, stdout, stderr)
+			return mcp.NewMain(s.Procs(), s.startListener)(args, stdin, stdout, stderr)
 		},
 		"version": s.version,
 	}

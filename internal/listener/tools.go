@@ -100,8 +100,6 @@ func (l *Listener) tool(c *client, req wire.ToolRequest) result {
 		return l.toolThread(ctx, s, req, args)
 	case wire.ToolHelper:
 		return l.toolHelper(ctx, s, req, args)
-	case wire.ToolVolunteer:
-		return l.toolVolunteer(s, args)
 	}
 	return l.toolStatus(s)
 }
@@ -476,7 +474,7 @@ func (l *Listener) toolSend(ctx context.Context, s *session, req wire.ToolReques
 }
 
 // textOpenNoAgent ends a send whose 'to' named only persons: it mentions nobody.
-const textOpenNoAgent = "No agent is mentioned, so it is an open question for volunteering agents and responders.\n"
+const textOpenNoAgent = "No agent is mentioned, so it is an open question for responders.\n"
 
 func (l *Listener) questionTimeoutLocked() time.Duration {
 	if l.st.Settings != nil {
@@ -771,23 +769,6 @@ func (l *Listener) toolHelper(ctx context.Context, s *session, req wire.ToolRequ
 		"and pass as=%q to send and reply.", l.short(uid), a.Name)}
 }
 
-func (l *Listener) toolVolunteer(s *session, raw json.RawMessage) result {
-	var a struct {
-		On *bool `json:"on"`
-	}
-	if json.Unmarshal(raw, &a) != nil || a.On == nil {
-		return fail("'on' must be true or false")
-	}
-	l.mu.Lock()
-	s.Volunteer = *a.On
-	l.changedLocked()
-	l.mu.Unlock()
-	if *a.On {
-		return result{text: "You now volunteer: open questions in the agents room are shown to you. This ends with the session."}
-	}
-	return result{text: "You no longer volunteer: open questions are not shown to you."}
-}
-
 func (l *Listener) toolStatus(s *session) result {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -810,9 +791,5 @@ func (l *Listener) toolStatus(s *session) result {
 		}
 		helpers = strings.Join(parts, ", ")
 	}
-	vol := "off"
-	if s.Volunteer {
-		vol = "on"
-	}
-	return result{text: "Agent: " + agent + "\nHelpers: " + helpers + "\nVolunteer: " + vol + "\nConnection: " + l.phase}
+	return result{text: "Agent: " + agent + "\nHelpers: " + helpers + "\nConnection: " + l.phase}
 }

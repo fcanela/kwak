@@ -13,7 +13,7 @@ type Reason string
 const (
 	Mention      Reason = "mention"       // the message mentions the agent
 	YourThread   Reason = "your_thread"   // a reply in a thread the agent started
-	OpenQuestion Reason = "open_question" // a question nobody was asked, for a volunteer
+	OpenQuestion Reason = "open_question" // a question nobody was asked, for the responder
 	Notice       Reason = "notice"        // written by kwak itself, for example the question timeout
 )
 

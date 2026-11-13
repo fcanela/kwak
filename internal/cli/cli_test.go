@@ -567,11 +567,11 @@ func TestPairBadOwnerDefault(t *testing.T) {
 func TestRepair(t *testing.T) {
 	r := newRig(t)
 	r.paired()
-	// The responder and run limit keys of decision 46: a re-pair keeps them too.
+	// The responder, run limit and autostart keys of decision 46: a re-pair keeps them too.
 	before := r.config()
 	for k, v := range map[string]any{"responder": true, "responder_dir": "/opt/resp", "responder_prompt": "p",
 		"responder_command": []any{"/opt/x", "{session}"}, "responder_continue": []any{"/opt/x", "-r", "{session}"},
-		"responder_own_agents": true, "responder_timeout": "5m", "resume_timeout": "20m"} {
+		"responder_own_agents": true, "responder_timeout": "5m", "resume_timeout": "20m", "listener_autostart": false} {
 		before[k] = v
 	}
 	data, _ := json.Marshal(before)

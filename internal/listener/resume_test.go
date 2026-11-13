@@ -188,11 +188,6 @@ func TestResumeTriggers(t *testing.T) {
 			e.deliver(event("$root", uid, e.clk.Now(), text("q")))
 			e.hook(311, hookReq("codex", wire.EventSessionEnd, cx1, dir))
 		}
-		e.l.mu.Lock()
-		e.l.st.Sessions[key].Volunteer = true
-		e.l.reindexLocked()
-		e.l.idx.Volunteers[key] = uid
-		e.l.mu.Unlock()
 		switch c.reason {
 		case "reply":
 			e.deliver(event("$x", bob, e.clk.Now(), inThread(text("a"), "$root")))

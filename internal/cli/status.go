@@ -157,9 +157,6 @@ func printStatus(w io.Writer, st wire.StatusResponse) {
 		} else {
 			parts = append(parts, "no tools connection")
 		}
-		if s.Volunteer {
-			parts = append(parts, "volunteers")
-		}
 		parts = append(parts, fmt.Sprintf("inbox %d", s.Inbox))
 		fmt.Fprintf(w, "    %s\n", strings.Join(parts, "; "))
 		times := "started " + stamp(s.Started)

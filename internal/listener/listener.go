@@ -129,7 +129,7 @@ const (
 	textParentClosed = "your session's agent is closed; try again in a moment"
 	textBadSession   = "kwak could not use this session id"
 	textNames        = "kwak could not name an agent for this session"
-	textNotSeen      = "kwak has not seen this session start yet; try again in a moment. If it keeps saying this, the kwak listener was not running when this session started: start a new session, or run /clear in Claude Code"
+	textNotSeen      = "kwak has not seen this session start yet; try again in a moment. If it keeps saying this, start a new session"
 	textOlder        = wire.TextListenerOlder
 	textNoPoll       = "Replies in this thread and messages that mention you are shown to you automatically. There is nothing to poll."
 )

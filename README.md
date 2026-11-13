@@ -171,8 +171,7 @@ the script, as you like. Each message then costs one `haiku` call. See spec 5.16
 When a session sends a question and the listener is not running, kwak starts the user service
 that `kwak install` set up, once per session. It never starts anything else. `kwak config
 autostart off` turns this off. A Claude Code session that opened while the listener was down is
-not known to it yet: its send starts the listener but fails; run `/clear` or open a new session,
-then send again.
+not known to it yet: its first send starts the listener but fails, and the next send goes through.
 
 ## Work on kwak
 

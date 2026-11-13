@@ -55,29 +55,42 @@ func TestLinkMCPFirst(t *testing.T) {
 	}
 }
 
-// A Claude Code session that started while the listener was down stays unknown: a later prompt
-// hook and the MCP hello's env_session do not register it, so a send keeps failing. The error
-// says how to get out (Q74): start a new session or run /clear.
+// A Claude Code session that started while the listener was down is unknown until its next hook.
+// That hook registers it (decision 47, Q74): the first send fails, and the one after the failed
+// send's PostToolUse goes through, with no /clear.
 func TestSessionStartedWhileListenerDown(t *testing.T) {
 	e := newEnv(t)
 	e.connect()
 	h := e.claudeTree(100)
 	e.child(h, 110)
 	c := e.mcp(e.child(h, 120).PID, "claude", sid1)
-	e.hook(110, hookReq("claude", wire.EventPrompt, sid1, cwd))
 	e.clk.instant = true
-	r := e.tool(c, "send", `{"text":"which port?"}`)
-	if !r.IsError || !strings.HasPrefix(r.Text, "kwak has not seen this session start yet") ||
-		!strings.Contains(r.Text, "not running when this session started") || !strings.Contains(r.Text, "/clear") {
-		t.Fatalf("send: %+v", r)
+	if r := e.tool(c, "send", `{"text":"which port?"}`); !r.IsError || r.Text != textNotSeen {
+		t.Fatalf("first send: %+v", r)
 	}
 	e.clk.instant = false
 	if e.session(k1) != nil {
-		t.Fatal("the session was registered without a SessionStart")
+		t.Fatal("the session was registered without any hook")
 	}
-	e.start(110, "claude", sid2, "clear", cwd)
-	if r := e.tool(c, "helper", `{"name":"t"}`); r.IsError || e.session(k2).Helpers["t"] == nil {
-		t.Fatalf("after /clear: %+v", r)
+	e.hook(110, hookReq("claude", wire.EventPostTool, sid1, cwd))
+	if s := e.session(k1); s == nil || s.Cwd != cwd {
+		t.Fatalf("the next hook did not register the session: %+v", s)
+	}
+	e.waitAgent(k1)
+	if r := e.tool(c, "send", `{"text":"which port?"}`); r.IsError {
+		t.Fatalf("second send: %+v", r)
+	}
+}
+
+// A later hook with no folder registers nothing.
+func TestLaterHookWithoutFolder(t *testing.T) {
+	e := newEnv(t)
+	e.connect()
+	h := e.claudeTree(100)
+	e.child(h, 110)
+	e.hook(110, hookReq("claude", wire.EventStop, sid1, ""))
+	if e.session(k1) != nil {
+		t.Fatal("a hook with no cwd registered the session")
 	}
 }
 

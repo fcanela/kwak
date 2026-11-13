@@ -79,6 +79,13 @@ type MachineConfig struct {
 // Autostart reports whether kwak mcp may start the listener's user service (listener_autostart).
 func (c MachineConfig) Autostart() bool { return c.ListenerAutostart == nil || *c.ListenerAutostart }
 
+// How long a check command may take (spec 5.16). The outgoing check holds a send or reply, so it
+// must end well under the MCP server's 25 s wait for a tool call (decision 47: 20 s).
+const (
+	CheckOutWait = 20 * time.Second
+	CheckInWait  = 30 * time.Second
+)
+
 // DefaultRunTimeout limits one background or responder run (decision 46: "Lets set both to 15").
 const DefaultRunTimeout = 15 * time.Minute
 

@@ -149,8 +149,11 @@ func TestConfigCheckDefault(t *testing.T) {
 	}
 	r := newRig(t)
 	r.paired()
-	for _, way := range []string{"outgoing", "incoming"} {
+	for way, wait := range map[string]string{"outgoing": "over 20s", "incoming": "over 30s"} {
 		code, out, errs := r.run(r.cli.Config, "", "check-"+way, "default")
+		if !strings.Contains(out, wait) {
+			t.Errorf("%s: the text does not give the check's wait (%s): %s", way, wait, out)
+		}
 		script := filepath.Join(r.cfgDir, ScreenerFolder, "check-"+way)
 		if code != 0 || r.config()["check_"+way] != script || !strings.Contains(out, "default screener") {
 			t.Fatalf("%s: exit %d %s %s, config %v", way, code, out, errs, r.config()["check_"+way])

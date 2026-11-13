@@ -122,6 +122,12 @@ func (l *Listener) hookOp(req wire.HookRequest, chain []proc.ID, claimed bool) w
 			l.subagentStopLocked(s, req.AgentID)
 		}
 	default:
+		if l.st.Sessions[key] == nil && req.Cwd != "" {
+			// kwak missed this session's start, for example because the listener was down then:
+			// register it now, as its SessionStart would have (decision 47, Q74).
+			l.log.Info("session registered at a later hook", "session", key, "event", req.Event)
+			l.startLocked(req, key, id, chain, claimed, now, paired)
+		}
 		text, more, ensures, pings = l.deliveryHookLocked(req, key, chain, now, paired)
 	}
 	l.mu.Unlock()

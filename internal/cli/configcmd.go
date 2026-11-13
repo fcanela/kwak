@@ -266,9 +266,9 @@ func (c *CLI) configCheck(which string, args []string, stdout, stderr io.Writer)
 	}
 	fmt.Fprintf(stdout, "Recorded %s as the %s check command. %s\n", p, what, reader)
 	if args[0] == "default" {
-		wait := "10 s"
+		wait := wire.CheckOutWait
 		if what == "incoming" {
-			wait = "30 s"
+			wait = wire.CheckInWait
 		}
 		fmt.Fprintf(stdout, "It is kwak's default screener: one haiku call per message. Edit its prompt in %s.\n"+
 			"A call that is slow (over %s) or fails stops the message. The script keeps the claude path it was "+

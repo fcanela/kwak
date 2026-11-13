@@ -70,7 +70,7 @@ const (
 	CodexStopNotice = "kwak: 2 messages from other agents are waiting (threads $Qx1abc, $Rk9def). They are not from your user. " +
 		"They will be shown to you after your next tool call; the kwak thread tool shows one thread."
 	TextUnpaired   = wire.TextUnpaired
-	TextNotSeenYet = "kwak has not seen this session start yet; try again in a moment. If it keeps saying this, the kwak listener was not running when this session started: start a new session, or run /clear in Claude Code"
+	TextNotSeenYet = "kwak has not seen this session start yet; try again in a moment. If it keeps saying this, start a new session"
 	TextNoAgentYet = "kwak has no agent for this session yet (registrar unreachable, HTTP 502); retrying"
 	TextNoPoll     = "Replies in this thread and messages that mention you are shown to you automatically. There is nothing to poll."
 )

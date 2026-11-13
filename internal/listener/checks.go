@@ -2,7 +2,6 @@ package listener
 
 import (
 	"context"
-	"time"
 
 	"github.com/fcanela/kwak/internal/check"
 	"github.com/fcanela/kwak/internal/render"
@@ -12,8 +11,8 @@ import (
 // Checks (spec 5.16): the secrets scan, then the check command when one is set. Outgoing, they run
 // in send and reply before anything is posted; incoming, before a message reaches an inbox.
 const (
-	checkOutWait = 10 * time.Second // well under the MCP server's 25 s wait for a tool call
-	checkInWait  = 30 * time.Second
+	checkOutWait = wire.CheckOutWait
+	checkInWait  = wire.CheckInWait
 	checkMax     = 4  // incoming check commands at once
 	keepRejected = 20 // rejections kept for kwak status
 )
